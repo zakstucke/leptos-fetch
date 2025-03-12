@@ -1,0 +1,40 @@
+[package]
+name = "leptos-fetch"
+version.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+edition.workspace = true
+keywords.workspace = true
+description.workspace = true
+readme.workspace = true
+
+[lib]
+name = "leptos_fetch"
+path = "src/lib.rs"
+
+[features]
+ssr = ["leptos/ssr"]
+# hydrate = ["leptos/hydrate"]
+# csr = ["leptos/csr"]
+
+[build-dependencies]
+rustc_version = "0.4"
+
+[dependencies]
+any_spawner.workspace = true
+hydration_context.workspace = true
+leptos.workspace = true
+
+chrono.workspace = true
+paste.workspace = true
+send_wrapper.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+rstest.workspace = true
+futures.workspace = true
+any_spawner = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+

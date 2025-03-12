@@ -1,0 +1,32 @@
+[workspace]
+members = ["leptos-fetch"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+repository = "https://github.com/zakstucke/leptos-fetch"
+license = "MIT"
+authors = ["Zak Stucke"]
+edition = "2021"
+keywords = ["leptos"]
+description = "Async query manager for Leptos"
+readme = "./leptos-fetch/README.md"
+
+# [patch.crates-io]
+# any_spawner = { path = "../leptos/any_spawner" }
+# hydration_context = { path = "../leptos/hydration_context" }
+# leptos = { path = "../leptos/leptos" }
+
+[workspace.dependencies]
+any_spawner = "0.2"
+hydration_context = "0.2"
+leptos = "0.7" # 0.8.0-alpha
+
+chrono = "0.4"
+futures = "0.3"
+paste = "1"
+send_wrapper = "0.6"
+serde = "1"
+tokio = { version = "1", default-features = false }
+
+rstest = "0.25"
