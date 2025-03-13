@@ -1,12 +1,10 @@
 <!-- cargo-rdme start -->
 
-## DOCUMENTATION IN PROGRESS
-
 # Leptos Fetch
 
 [<img alt="github" src="https://img.shields.io/badge/github-zakstucke/leptos--fetch-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/zakstucke/leptos-fetch)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/leptos-fetch.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/leptos-fetch)
-[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-leptos-fetch-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/leptos-fetch)
+[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-leptos--fetch-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/leptos-fetch)
 <!-- [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/zakstucke/leptos-fetch/rust.yml?branch=main&style=for-the-badge" height="20">](https://github.com/zakstucke/leptos-fetch/actions?query=branch%3Amain) -->
 
 
@@ -41,13 +39,13 @@ Lines that have a strike through are features not currently brought over from [L
 - `ssr` Server-side rendering: Initiate queries on the server.
 <!-- - `hydrate` Hydration: Ensure that queries are hydrated on the client, when using server-side rendering. -->
 
-## Version compatibility for Leptos and Leptos Query
+## Version compatibility for Leptos and Leptos Fetch
 
 The table below shows the compatible versions of `leptos-fetch` for each `leptos` version. Ensure you are using compatible versions to avoid potential issues.
 
 | `leptos` version | `leptos-fetch` version |
 |------------------|------------------------|
-| 0.7.*            | 0.1.*                  |
+| 0.7.*            | `0.1.*` `0.2.* `       |
 
 
 ## Installation
@@ -69,7 +67,7 @@ ssr = [
 
 ## Quick Start
 
-In the root of your App, provide a query client with [provide_query_client] or [provide_query_client_with_options] if you want to override the default options.
+In the root of your App, provide a query client with [QueryClient::provide()] or [QueryClient::provide_with_options()] if you want to override the default options.
 
 ```rust
 use leptos::prelude::*;
@@ -77,10 +75,10 @@ use leptos_fetch::QueryClient;
 
 #[component]
 pub fn App() -> impl IntoView {
-    // Provides the Query Client for the entire app.
-    provide_context(QueryClient::new());
+    // Provides the Query Client for the entire app via leptos context.
+    QueryClient::provide();
     
-    // QueryClient::new_with_options(QueryOptions::new()..) can customize default caching behaviour.
+    // QueryClient::provide_with_options(QueryOptions::new()..) can customize default caching behaviour.
 
     // Rest of App...
 }
@@ -89,7 +87,7 @@ pub fn App() -> impl IntoView {
 Any async function can be used as a query:
 
 ```rust
-/// Query fetcher.
+/// The query function.
 async fn get_track(id: i32) -> String {
     todo!()
 }
@@ -97,19 +95,22 @@ async fn get_track(id: i32) -> String {
 
 Now you can use the query in any component in your app.
 
-```rust,ignore
+```rust
 use leptos::prelude::*;
 use leptos_fetch::QueryClient;
 
 #[component]
 fn TrackView(id: i32) -> impl IntoView {
-    // Pull the root client from global context
-    // Identical to expect_context::<QueryClient>()
+    // Usually at the root of the App:
+    QueryClient::provide();
+
+    // Extract the root client from leptos context,
+    // this is identical to expect_context::<QueryClient>()
     let client = QueryClient::expect();
     
     // Native leptos resources are returned, 
     // there are also variants for local, blocking, arc resources. 
-    let resource = QueryClient::resource(client, get_track, move || id.clone());
+    let resource = client.resource(get_track, move || id.clone());
 
     view! {
        <div>
@@ -127,10 +128,20 @@ fn TrackView(id: i32) -> impl IntoView {
        </div>
     }
 }
+
+/// The query function.
+async fn get_track(id: i32) -> String {
+    todo!()
+}
 ```
+
+You can read more about leptos resources in the [Leptos Book](https://book.leptos.dev/async/10_resources.html?highlight=resources#resources)
+
 <!-- For a complete working example see [the example directory](/example) -->
 
-`QueryScope` and `QueryScopeLocal` can be used instead of directly passing a function, this allows setting options specific to a query type:
+`QueryScope` and `QueryScopeLocal` can be used instead of directly passing a function to [`QueryClient`] methods to only apply to one query type.
+
+These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
 
 ```rust
 use std::time::Duration;
@@ -146,11 +157,18 @@ fn track_query() -> QueryScope<i32, String> {
     )
 }
 
-/// Query fetcher.
+/// The query function.
 async fn get_track(id: i32) -> String {
     todo!()
 }
 ```
+
+The [`QueryClient`] contains many documented utility methods other than resources for:
+- Declaratively fetching queries
+- Declaratively prefetching queries
+- Mutating cached queries
+- Invalidating cached queries
+- Accessing cached queries
 
 <!-- ## Devtools Quickstart
 

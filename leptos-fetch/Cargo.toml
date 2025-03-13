@@ -21,6 +21,10 @@ ssr = ["leptos/ssr"]
 [build-dependencies]
 rustc_version = "0.4"
 
+[package.metadata.docs.rs]
+# For the features to show in docs.rs, need to tell it to include them:
+all-features = true
+
 [dependencies]
 any_spawner.workspace = true
 hydration_context.workspace = true

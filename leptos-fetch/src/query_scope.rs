@@ -10,8 +10,14 @@ use std::{
 use crate::QueryOptions;
 
 macro_rules! define {
-    ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident) => {
-        /// TODO
+    ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident, $sname:literal, $sthread:literal) => {
+        /// A
+        #[doc = $sthread]
+        /// wrapper for a query function. This can be used to add specific [`QueryOptions`] to only apply to one query type.
+        ///
+        /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
+        ///
+        /// If you don't need to set specific options, you can use functions with the [`crate::QueryClient`] directly.
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
@@ -20,7 +26,11 @@ macro_rules! define {
         }
 
         impl<K, V> $name<K, V> {
-            /// TODO
+            /// Create a new
+            #[doc = $sname]
+            ///  with specific [`QueryOptions`] to only apply to this query type.
+            ///
+            /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
             pub fn new<F, Fut>(query: F, options: QueryOptions) -> Self
             where
                 F: Fn(K) -> Fut $($impl_fn_generics)* + 'static,
@@ -44,28 +54,29 @@ macro_rules! define {
         }
 
         paste! {
-            /// TODO
+            /// Coercer trait, ignore.
             pub trait [<$name Trait>] <K, V>
             where
                 K: 'static,
                 V: 'static,
              {
-                /// TODO
+                /// Coercer trait, ignore.
                 fn options(&self) -> Option<QueryOptions> {
                     Default::default()
                 }
 
-                /// TODO
+                /// Coercer trait, ignore.
                 fn cache_key(&self) -> TypeId;
 
-                /// TODO
+                /// Coercer trait, ignore.
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_;
             }
 
-            impl<K, V, Fut> [<$name Trait>]<K, V> for fn(K) -> Fut
+            impl<K, V, F, Fut> [<$name Trait>]<K, V> for F
             where
                 K: 'static,
                 V: 'static,
+                F: Fn(K) -> Fut + 'static,
                 Fut: Future<Output = V> $($impl_fut_generics)* + 'static,
              {
 
@@ -95,6 +106,25 @@ macro_rules! define {
                     (self.query)(key)
                 }
             }
+
+            impl<K, V, T> [<$name Trait>]<K, V> for Arc<T>
+            where
+                K: 'static,
+                V: 'static,
+                T: [<$name Trait>]<K, V>,
+            {
+                fn options(&self) -> Option<QueryOptions> {
+                    T::options(self)
+                }
+
+                fn cache_key(&self) -> TypeId {
+                    T::cache_key(self)
+                }
+
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                    T::query(self, key)
+                }
+            }
         }
     };
 }
@@ -117,5 +147,5 @@ where
     }
 }
 
-define! { [+ Send], [+ Send + Sync], QueryScope }
-define! { [], [], QueryScopeLocal }
+define! { [+ Send], [+ Send + Sync], QueryScope, "QueryScope", "threadsafe" }
+define! { [], [], QueryScopeLocal, "QueryScopeLocal", "non-threadsafe" }

@@ -3,9 +3,7 @@ use std::time::Duration;
 pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_GC_TIME: Duration = Duration::from_secs(300);
 
-/**
- * Options for a query [`use_query()`](crate::use_query())
- */
+/// Configuration to be used with [`crate::QueryClient`] and individual query types.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QueryOptions {
     stale_time: Option<Duration>,
@@ -13,12 +11,18 @@ pub struct QueryOptions {
 }
 
 impl QueryOptions {
-    /// Create a new set of query options
+    /// Create new [`QueryOptions`] with default values.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Set the time after which a query is considered stale
+    /// Set the duration that should pass before a query is considered stale.
+    ///
+    /// If the query is stale, it will be refetched when it's next accessed.
+    ///
+    /// To never mark as stale, set [`Duration::MAX`].
+    ///
+    /// Default: `10 seconds`
     #[track_caller]
     pub fn set_stale_time(mut self, stale_time: Duration) -> Self {
         if let Some(gc_time) = self.gc_time {
@@ -30,7 +34,11 @@ impl QueryOptions {
         self
     }
 
-    /// Set the time after which a query is garbage collected
+    /// Set the duration that should pass before an unused query is garbage collected.
+    ///
+    /// To never garbage collect, set [`Duration::MAX`].
+    ///
+    /// Default: `5 minutes`
     #[track_caller]
     pub fn set_gc_time(mut self, gc_time: Duration) -> Self {
         if let Some(stale_time) = self.stale_time {
@@ -42,12 +50,18 @@ impl QueryOptions {
         self
     }
 
-    /// Get the time after which a query is considered stale
+    /// The duration that should pass before a query is considered stale.
+    ///
+    /// If the query is stale, it will be refetched when it's next accessed.
+    ///
+    /// Default: `10 seconds`
     pub fn stale_time(&self) -> Duration {
         self.stale_time.unwrap_or(DEFAULT_STALE_TIME)
     }
 
-    /// Get the time after which a query is garbage collected
+    /// The duration that should pass before an unused query is garbage collected.
+    ///
+    /// Default: `5 minutes`
     pub fn gc_time(&self) -> Duration {
         self.gc_time.unwrap_or(DEFAULT_GC_TIME)
     }

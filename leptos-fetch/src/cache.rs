@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use leptos::prelude::{ArcRwSignal, ReadValue, StoredValue, Track, WriteValue};
+use leptos::prelude::{ArcRwSignal, ReadValue, Set, StoredValue, Track, WriteValue};
 use send_wrapper::SendWrapper;
 
 use crate::{query::Query, utils::random_u64_rolling, QueryClient, QueryOptions};
@@ -29,10 +29,18 @@ impl<K, V> Default for Scope<K, V> {
 }
 
 pub(crate) trait Busters: 'static {
+    fn invalidate_scope(&mut self);
+
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
 
 impl<K: 'static, V: 'static> Busters for Scope<K, V> {
+    fn invalidate_scope(&mut self) {
+        for query in self.cache.values_mut() {
+            query.invalidate();
+        }
+    }
+
     fn busters(&self) -> Vec<ArcRwSignal<u64>> {
         self.cache
             .values()
@@ -42,6 +50,10 @@ impl<K: 'static, V: 'static> Busters for Scope<K, V> {
 }
 
 impl<K: 'static, V: 'static> Busters for SendWrapper<Scope<K, V>> {
+    fn invalidate_scope(&mut self) {
+        self.deref_mut().invalidate_scope();
+    }
+
     fn busters(&self) -> Vec<ArcRwSignal<u64>> {
         self.deref().busters()
     }
@@ -169,6 +181,27 @@ impl ScopeLookup {
         }
     }
 
+    pub fn gc_query<K, V>(&self, cache_key: TypeId, key: &K)
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        let mut guard = self.scopes.write_value();
+        let remove_scope = if let Some(scope) = guard.get_mut(&cache_key) {
+            let scope = scope
+                .as_any_mut()
+                .downcast_mut::<Scope<K, V>>()
+                .expect("Cache entry type mismatch.");
+            scope.cache.remove(key);
+            scope.cache.is_empty()
+        } else {
+            false
+        };
+        if remove_scope {
+            guard.remove(&cache_key);
+        }
+    }
+
     pub async fn cached_or_fetch<K, V, Fut>(
         &self,
         client: &QueryClient,
@@ -205,7 +238,7 @@ impl ScopeLookup {
         key: K,
         cache_key: TypeId,
         fetcher: impl FnOnce(K) -> Fut + 'static,
-        custom_next_buster: Option<ArcRwSignal<u64>>,
+        mut custom_next_buster: Option<ArcRwSignal<u64>>,
         track: bool,
         default_scope_cb: impl FnOnce() -> Box<dyn ScopeTrait> + Clone,
         return_cb: impl FnOnce(&V) -> T + Clone,
@@ -216,6 +249,8 @@ impl ScopeLookup {
         V: 'static,
         Fut: Future<Output = V> + 'static,
     {
+        let mut using_stale_buster = false;
+
         // Otherwise fetch and cache:
         let fetcher_mutex =
             self.fetcher_mutex::<K, V>(key.clone(), cache_key, default_scope_cb.clone());
@@ -227,14 +262,20 @@ impl ScopeLookup {
                 if let Some(cached) =
                     self.with_cached_query::<K, V, _>(&key, &cache_key, |maybe_cached| {
                         if let Some(cached) = maybe_cached {
-                            if let Some(value) = cached.value_if_not_stale() {
-                                if track {
-                                    cached.buster.track();
-                                }
-                                Some((return_cb.clone())(value))
-                            } else {
-                                None
+                            if track {
+                                cached.buster.track();
                             }
+
+                            // If stale, we won't use the cache, but we'll still need to invalidate those previously using it,
+                            // so use the old buster as the custom_next_buster,
+                            // and set using_stale_buster=true so we can invalidate it after the update:
+                            if cached.stale() {
+                                custom_next_buster = Some(cached.buster.clone());
+                                using_stale_buster = true;
+                                return None;
+                            }
+
+                            Some((return_cb.clone())(cached.value_maybe_stale.value()))
                         } else {
                             None
                         }
@@ -251,6 +292,7 @@ impl ScopeLookup {
 
         let next_buster =
             custom_next_buster.unwrap_or_else(|| ArcRwSignal::new(random_u64_rolling()));
+
         if track {
             next_buster.track();
         }
@@ -266,12 +308,17 @@ impl ScopeLookup {
                     cache_key,
                     &key,
                     new_value,
-                    next_buster,
+                    next_buster.clone(),
                     scope_options,
                 );
                 scope.expect("provided a default").cache.insert(key, query);
             },
         );
+
+        // If we're replacing an existing item in the cache, need to invalidate anything using it:
+        if using_stale_buster {
+            next_buster.set(random_u64_rolling());
+        }
 
         return_value
     }

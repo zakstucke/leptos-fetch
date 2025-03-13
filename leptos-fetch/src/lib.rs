@@ -3,13 +3,12 @@
 #![allow(clippy::too_many_arguments)]
 #![warn(clippy::disallowed_types)]
 #![warn(missing_docs)]
-
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
-
 // When docs auto created for docs.rs, will include features, given docs.rs uses nightly by default:
 #![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_auto_cfg))]
 
 mod cache;
+mod gc;
 mod query;
 mod query_client;
 mod query_options;
@@ -180,12 +179,14 @@ mod test {
 
     macro_rules! prep_client {
         () => {{
+            _ = Executor::init_tokio();
             let owner = Owner::new_root(Some(Arc::new(MockHydrateSharedContext::new(None).await)));
             owner.set();
             let client = QueryClient::new();
             client
         }};
         ($ssr_ctx:expr) => {{
+            _ = Executor::init_tokio();
             let owner = Owner::new_root(Some(Arc::new(
                 MockHydrateSharedContext::new(Some(&$ssr_ctx)).await,
             )));
@@ -214,7 +215,7 @@ mod test {
         };
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ResourceType {
         Local,
         Normal,
@@ -251,120 +252,149 @@ mod test {
     #[rstest]
     #[tokio::test]
     async fn test_unsync(#[values(false, true)] arc: bool) {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                #[derive(Debug)]
-                struct UnsyncValue(u64, PhantomData<NonNull<()>>);
-                impl PartialEq for UnsyncValue {
-                    fn eq(&self, other: &Self) -> bool {
-                        self.0 == other.0
-                    }
+        #[derive(Debug)]
+        struct UnsyncValue(u64, PhantomData<NonNull<()>>);
+        impl PartialEq for UnsyncValue {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+        impl Eq for UnsyncValue {}
+        impl Clone for UnsyncValue {
+            fn clone(&self) -> Self {
+                Self(self.0, PhantomData)
+            }
+        }
+        impl UnsyncValue {
+            fn new(value: u64) -> Self {
+                Self(value, PhantomData)
+            }
+        }
+
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = {
+            let fetch_calls = fetch_calls.clone();
+            move |key: u64| {
+                fetch_calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    UnsyncValue::new(key * 2)
                 }
-                impl Eq for UnsyncValue {}
-                impl Clone for UnsyncValue {
-                    fn clone(&self) -> Self {
-                        Self(self.0, PhantomData)
-                    }
+            }
+        };
+        let fetcher = QueryScopeLocal::new(fetcher, Default::default());
+
+        let (client, _guard) = prep_vari!(false);
+
+        macro_rules! check {
+            ($resource:expr) => {{
+                // Should be None initially with the sync methods:
+                assert!($resource.get_untracked().is_none());
+                assert!($resource.try_get_untracked().unwrap().is_none());
+                assert!($resource.get().is_none());
+                assert!($resource.try_get().unwrap().is_none());
+                assert!($resource.read().is_none());
+                assert!($resource.try_read().as_deref().unwrap().is_none());
+
+                // On the server cannot actually run local resources:
+                if cfg!(not(feature = "ssr")) {
+                    assert_eq!($resource.await, UnsyncValue::new(4));
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+                    tick!();
+
+                    assert_eq!($resource.await, UnsyncValue::new(4));
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                 }
-                impl UnsyncValue {
-                    fn new(value: u64) -> Self {
-                        Self(value, PhantomData)
-                    }
-                }
+            }};
+        }
 
-                let fetch_calls = Arc::new(AtomicUsize::new(0));
-                let fetcher = {
-                    let fetch_calls = fetch_calls.clone();
-                    move |key: u64| {
-                        fetch_calls.fetch_add(1, Ordering::Relaxed);
-                        async move { UnsyncValue::new(key * 2) }
-                    }
-                };
-                let fetcher = QueryScopeLocal::new(fetcher, Default::default());
-
-                let (client, _guard) = prep_vari!(false);
-
-                macro_rules! check {
-                    ($resource:expr) => {{
-                        assert_eq!($resource.await, UnsyncValue::new(4));
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                        tick!();
-
-                        assert_eq!($resource.await, UnsyncValue::new(4));
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                    }};
-                }
-
-                match arc {
-                    true => {
-                        check!(client.arc_local_resource(fetcher.clone(), || 2))
-                    }
-                    false => {
-                        check!(client.local_resource(fetcher.clone(), || 2))
-                    }
-                }
-            })
-            .await;
+        match arc {
+            true => {
+                check!(client.arc_local_resource(fetcher.clone(), || 2))
+            }
+            false => {
+                check!(client.local_resource(fetcher.clone(), || 2))
+            }
+        }
     }
 
     /// Make sure resources reload when queries invalidated correctly.
     #[rstest]
     #[tokio::test]
-    async fn test_manual_invalidation(
+    async fn test_invalidation(
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
         #[values(false, true)] individual_invalidation: bool,
     ) {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let fetch_calls = Arc::new(AtomicUsize::new(0));
-                let fetcher = {
-                    let fetch_calls = fetch_calls.clone();
-                    move |key: u64| {
-                        fetch_calls.fetch_add(1, Ordering::Relaxed);
-                        async move { key * 2 }
-                    }
-                };
-                let fetcher = QueryScope::new(fetcher, Default::default());
-
-                let (client, _guard) = prep_vari!(server_ctx);
-
-                macro_rules! check {
-                    ($resource:expr) => {{
-                        assert_eq!($resource.await, 4);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                        tick!();
-
-                        // Shouldn't change despite ticking:
-                        assert_eq!($resource.await, 4);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                        if individual_invalidation {
-                            client.invalidate_query(fetcher.clone(), &2);
-                        } else {
-                            client.invalidate_all_queries();
-                        }
-
-                        tick!();
-
-                        assert_eq!($resource.await, 4);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
-                    }};
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = {
+            let fetch_calls = fetch_calls.clone();
+            move |key: u64| {
+                fetch_calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    key * 2
                 }
+            }
+        };
+        let fetcher = QueryScope::new(fetcher, Default::default());
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    || 2,
-                    resource_type,
-                    arc
-                );
-            })
-            .await;
+        let (client, _guard) = prep_vari!(server_ctx);
+
+        macro_rules! check {
+            ($resource:expr) => {{
+                // Should be None initially with the sync methods:
+                assert!($resource.get_untracked().is_none());
+                assert!($resource.try_get_untracked().unwrap().is_none());
+                assert!($resource.get().is_none());
+                assert!($resource.try_get().unwrap().is_none());
+                assert!($resource.read().is_none());
+                assert!($resource.try_read().as_deref().unwrap().is_none());
+
+                // On the server cannot actually run local resources:
+                if cfg!(not(feature = "ssr")) && resource_type == ResourceType::Local {
+                    assert_eq!($resource.await, 4);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+                    tick!();
+
+                    // Shouldn't change despite ticking:
+                    assert_eq!($resource.await, 4);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+                    if individual_invalidation {
+                        client.invalidate_query(fetcher.clone(), &2);
+                        // TODO test third type
+                    } else {
+                        client.invalidate_all_queries();
+                    }
+
+                    // Because it should now be stale, not gc'd,
+                    // sync fns on a new resource instance should still return the new value, it just means a background refresh has been triggered:
+                    // TODO need to PR so LocalResource doesn't return a SendWrapper
+                    let resource2 = client.resource(fetcher.clone(), || 2);
+                    assert_eq!(resource2.get_untracked(), Some(4));
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                    // macro_rules! check2 {
+                    //     ($resource2:expr) => {{
+                    //         assert_eq!(*&$resource2.get_untracked(), Some(4));
+                    //         assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                    //     }};
+                    // }
+                    // vari_new_resource_with_cb!(check2, client, fetcher.clone(), || 2, resource_type, arc);
+
+                    // Because the resource should've been auto invalidated, a tick should cause it to auto refetch:
+                    tick!();
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
+                    assert_eq!($resource.await, 4);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
+                }
+            }};
+        }
+
+        vari_new_resource_with_cb!(check, client, fetcher.clone(), || 2, resource_type, arc);
     }
 
     #[rstest]
@@ -374,49 +404,59 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let fetch_calls = Arc::new(AtomicUsize::new(0));
-                let fetcher = {
-                    let fetch_calls = fetch_calls.clone();
-                    move |key: u64| {
-                        fetch_calls.fetch_add(1, Ordering::Relaxed);
-                        async move { key * 2 }
-                    }
-                };
-                let fetcher = QueryScope::new(fetcher, Default::default());
-
-                let (client, _guard) = prep_vari!(server_ctx);
-
-                let add_size = RwSignal::new(1);
-
-                macro_rules! check {
-                    ($resource:expr) => {{
-                        assert_eq!($resource.await, 2);
-                        assert_eq!($resource.await, 2);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                        add_size.set(2);
-
-                        tick!();
-
-                        assert_eq!($resource.await, 4);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
-                        assert_eq!($resource.await, 4);
-                        assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
-                    }};
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = {
+            let fetch_calls = fetch_calls.clone();
+            move |key: u64| {
+                fetch_calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    key * 2
                 }
+            }
+        };
+        let fetcher = QueryScope::new(fetcher, Default::default());
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    move || add_size.get(),
-                    resource_type,
-                    arc
-                );
-            })
-            .await;
+        let (client, _guard) = prep_vari!(server_ctx);
+
+        let add_size = RwSignal::new(1);
+
+        macro_rules! check {
+            ($resource:expr) => {{
+                // Should be None initially with the sync methods:
+                assert!($resource.get_untracked().is_none());
+                assert!($resource.try_get_untracked().unwrap().is_none());
+                assert!($resource.get().is_none());
+                assert!($resource.try_get().unwrap().is_none());
+                assert!($resource.read().is_none());
+                assert!($resource.try_read().as_deref().unwrap().is_none());
+
+                // On the server cannot actually run local resources:
+                if cfg!(not(feature = "ssr")) && resource_type == ResourceType::Local {
+                    assert_eq!($resource.await, 2);
+                    assert_eq!($resource.await, 2);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+                    add_size.set(2);
+
+                    tick!();
+
+                    assert_eq!($resource.await, 4);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
+                    assert_eq!($resource.await, 4);
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
+                }
+            }};
+        }
+
+        vari_new_resource_with_cb!(
+            check,
+            client,
+            fetcher.clone(),
+            move || add_size.get(),
+            resource_type,
+            arc
+        );
     }
 
     /// Make sure values on first receival and cached all stick to their specific key.
@@ -427,67 +467,57 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let fetch_calls = Arc::new(AtomicUsize::new(0));
-                let fetcher = {
-                    let fetch_calls = fetch_calls.clone();
-                    move |key: u64| {
-                        fetch_calls.fetch_add(1, Ordering::Relaxed);
-                        async move { key * 2 }
-                    }
-                };
-                let fetcher = QueryScope::new(fetcher, Default::default());
+        // On the server cannot actually run local resources:
+        if cfg!(feature = "ssr") && resource_type == ResourceType::Local {
+            return;
+        }
 
-                let (client, _guard) = prep_vari!(server_ctx);
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = {
+            let fetch_calls = fetch_calls.clone();
+            move |key: u64| {
+                fetch_calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    key * 2
+                }
+            }
+        };
+        let fetcher = QueryScope::new(fetcher, Default::default());
 
-                let keys = [1, 2, 3, 4, 5];
-                let results = futures::future::join_all(keys.iter().cloned().map(|key| {
-                    let fetcher = fetcher.clone();
-                    async move {
-                        macro_rules! cb {
-                            ($resource:expr) => {
-                                $resource.await
-                            };
-                        }
-                        vari_new_resource_with_cb!(
-                            cb,
-                            client,
-                            fetcher,
-                            move || key,
-                            resource_type,
-                            arc
-                        )
-                    }
-                }))
-                .await;
-                assert_eq!(results, vec![2, 4, 6, 8, 10]);
-                assert_eq!(fetch_calls.load(Ordering::Relaxed), 5);
+        let (client, _guard) = prep_vari!(server_ctx);
 
-                // Call again, each should still be accurate, but each should be cached so fetch call doesn't increase:
-                let results = futures::future::join_all(keys.iter().cloned().map(|key| {
-                    let fetcher = fetcher.clone();
-                    async move {
-                        macro_rules! cb {
-                            ($resource:expr) => {
-                                $resource.await
-                            };
-                        }
-                        vari_new_resource_with_cb!(
-                            cb,
-                            client,
-                            fetcher,
-                            move || key,
-                            resource_type,
-                            arc
-                        )
-                    }
-                }))
-                .await;
-                assert_eq!(results, vec![2, 4, 6, 8, 10]);
-                assert_eq!(fetch_calls.load(Ordering::Relaxed), 5);
-            })
-            .await;
+        let keys = [1, 2, 3, 4, 5];
+        let results = futures::future::join_all(keys.iter().cloned().map(|key| {
+            let fetcher = fetcher.clone();
+            async move {
+                macro_rules! cb {
+                    ($resource:expr) => {
+                        $resource.await
+                    };
+                }
+                vari_new_resource_with_cb!(cb, client, fetcher, move || key, resource_type, arc)
+            }
+        }))
+        .await;
+        assert_eq!(results, vec![2, 4, 6, 8, 10]);
+        assert_eq!(fetch_calls.load(Ordering::Relaxed), 5);
+
+        // Call again, each should still be accurate, but each should be cached so fetch call doesn't increase:
+        let results = futures::future::join_all(keys.iter().cloned().map(|key| {
+            let fetcher = fetcher.clone();
+            async move {
+                macro_rules! cb {
+                    ($resource:expr) => {
+                        $resource.await
+                    };
+                }
+                vari_new_resource_with_cb!(cb, client, fetcher, move || key, resource_type, arc)
+            }
+        }))
+        .await;
+        assert_eq!(results, vec![2, 4, 6, 8, 10]);
+        assert_eq!(fetch_calls.load(Ordering::Relaxed), 5);
     }
 
     /// Make sure resources that are loaded together only run once but share the value.
@@ -498,144 +528,141 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let fetch_calls = Arc::new(AtomicUsize::new(0));
-                let fetcher = {
-                    let fetch_calls = fetch_calls.clone();
-                    move |key: u64| {
-                        fetch_calls.fetch_add(1, Ordering::Relaxed);
-                        async move {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-                            key * 2
-                        }
-                    }
-                };
-                let fetcher = QueryScope::new(fetcher, Default::default());
+        // On the server cannot actually run local resources:
+        if cfg!(feature = "ssr") && resource_type == ResourceType::Local {
+            return;
+        }
 
-                let (client, _guard) = prep_vari!(server_ctx);
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let fetcher = {
+            let fetch_calls = fetch_calls.clone();
+            move |key: u64| {
+                fetch_calls.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                    key * 2
+                }
+            }
+        };
+        let fetcher = QueryScope::new(fetcher, Default::default());
 
-                let keyer = || 1;
-                let results = futures::future::join_all((0..10).map(|_| {
-                    let fetcher = fetcher.clone();
-                    async move {
-                        macro_rules! cb {
-                            ($resource:expr) => {
-                                $resource.await
-                            };
-                        }
-                        vari_new_resource_with_cb!(cb, client, fetcher, keyer, resource_type, arc)
-                    }
-                }))
-                .await
-                .into_iter()
-                .collect::<Vec<_>>();
-                assert_eq!(results, vec![2; 10]);
-                assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-            })
-            .await;
+        let (client, _guard) = prep_vari!(server_ctx);
+
+        let keyer = || 1;
+        let results = futures::future::join_all((0..10).map(|_| {
+            let fetcher = fetcher.clone();
+            async move {
+                macro_rules! cb {
+                    ($resource:expr) => {
+                        $resource.await
+                    };
+                }
+                vari_new_resource_with_cb!(cb, client, fetcher, keyer, resource_type, arc)
+            }
+        }))
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
+        assert_eq!(results, vec![2; 10]);
+        assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
     }
 
     #[cfg(feature = "ssr")]
     #[tokio::test]
     async fn test_resource_cross_stream_caching() {
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                for maybe_sleep_ms in &[None, Some(10), Some(30)] {
-                    let (client, ssr_ctx) = prep_server!();
+        for maybe_sleep_ms in &[None, Some(10), Some(30)] {
+            let (client, ssr_ctx) = prep_server!();
 
-                    let fetch_calls = Arc::new(AtomicUsize::new(0));
-                    let fetcher = {
-                        let fetch_calls = fetch_calls.clone();
-                        move |key: u64| {
-                            fetch_calls.fetch_add(1, Ordering::Relaxed);
-                            async move {
-                                if let Some(sleep_ms) = maybe_sleep_ms {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                                        *sleep_ms as u64,
-                                    ))
-                                    .await;
-                                }
-                                key * 2
-                            }
+            let fetch_calls = Arc::new(AtomicUsize::new(0));
+            let fetcher = {
+                let fetch_calls = fetch_calls.clone();
+                move |key: u64| {
+                    fetch_calls.fetch_add(1, Ordering::Relaxed);
+                    async move {
+                        if let Some(sleep_ms) = maybe_sleep_ms {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                *sleep_ms as u64,
+                            ))
+                            .await;
                         }
-                    };
-                    let fetcher = QueryScope::new(fetcher, Default::default());
-
-                    let keyer = || 1;
-
-                    // First call should require a fetch.
-                    assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    // Second should be cached by the query client because same key:
-                    assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    // Should make it over to the frontend too:
-                    let client = prep_client!(ssr_ctx);
-
-                    // This will stream from the first ssr resource:
-                    assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    // This will stream from the second ssr resource:
-                    assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    // This drives the effect that will put the resource into the frontend cache:
-                    tick!();
-
-                    // This didn't happen in ssr so nothing to stream,
-                    // but the other 2 resources shoud've still put themselves into the frontend cache,
-                    // so this should get picked up by that.
-                    assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    // Reset and confirm works for non blocking too:
-                    let (ssr_client, ssr_ctx) = prep_server!();
-                    fetch_calls.store(0, Ordering::Relaxed);
-
-                    // Don't await:
-                    let ssr_resource_1 = ssr_client.arc_resource(fetcher.clone(), keyer);
-                    let ssr_resource_2 = ssr_client.arc_resource(fetcher.clone(), keyer);
-
-                    let hydrate_client = prep_client!(ssr_ctx);
-
-                    // Matching 2 resources on hydrate, these should stream:
-                    let hydrate_resource_1 = hydrate_client.arc_resource(fetcher.clone(), keyer);
-                    let hydrate_resource_2 = hydrate_client.arc_resource(fetcher.clone(), keyer);
-
-                    // Wait for all 4 together, should still only have had 1 fetch.
-                    let results = futures::future::join_all(
-                        vec![
-                            hydrate_resource_2,
-                            ssr_resource_1,
-                            ssr_resource_2,
-                            hydrate_resource_1,
-                        ]
-                        .into_iter()
-                        .map(|resource| async move { resource.await }),
-                    )
-                    .await
-                    .into_iter()
-                    .collect::<Vec<_>>();
-
-                    assert_eq!(results, vec![2, 2, 2, 2]);
-                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-
-                    tick!();
-
-                    // This didn't have a matching backend one so should be using the populated cache and still not fetch:
-                    assert_eq!(hydrate_client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(
-                        fetch_calls.load(Ordering::Relaxed),
-                        1,
-                        "{:?}ms",
-                        maybe_sleep_ms
-                    );
+                        key * 2
+                    }
                 }
-            })
-            .await;
+            };
+            let fetcher = QueryScope::new(fetcher, Default::default());
+
+            let keyer = || 1;
+
+            // First call should require a fetch.
+            assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            // Second should be cached by the query client because same key:
+            assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            // Should make it over to the frontend too:
+            let client = prep_client!(ssr_ctx);
+
+            // This will stream from the first ssr resource:
+            assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            // This will stream from the second ssr resource:
+            assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            // This drives the effect that will put the resource into the frontend cache:
+            tick!();
+
+            // This didn't happen in ssr so nothing to stream,
+            // but the other 2 resources shoud've still put themselves into the frontend cache,
+            // so this should get picked up by that.
+            assert_eq!(client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            // Reset and confirm works for non blocking too:
+            let (ssr_client, ssr_ctx) = prep_server!();
+            fetch_calls.store(0, Ordering::Relaxed);
+
+            // Don't await:
+            let ssr_resource_1 = ssr_client.arc_resource(fetcher.clone(), keyer);
+            let ssr_resource_2 = ssr_client.arc_resource(fetcher.clone(), keyer);
+
+            let hydrate_client = prep_client!(ssr_ctx);
+
+            // Matching 2 resources on hydrate, these should stream:
+            let hydrate_resource_1 = hydrate_client.arc_resource(fetcher.clone(), keyer);
+            let hydrate_resource_2 = hydrate_client.arc_resource(fetcher.clone(), keyer);
+
+            // Wait for all 4 together, should still only have had 1 fetch.
+            let results = futures::future::join_all(
+                vec![
+                    hydrate_resource_2,
+                    ssr_resource_1,
+                    ssr_resource_2,
+                    hydrate_resource_1,
+                ]
+                .into_iter()
+                .map(|resource| async move { resource.await }),
+            )
+            .await
+            .into_iter()
+            .collect::<Vec<_>>();
+
+            assert_eq!(results, vec![2, 2, 2, 2]);
+            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+
+            tick!();
+
+            // This didn't have a matching backend one so should be using the populated cache and still not fetch:
+            assert_eq!(hydrate_client.arc_resource(fetcher.clone(), keyer).await, 2);
+            assert_eq!(
+                fetch_calls.load(Ordering::Relaxed),
+                1,
+                "{:?}ms",
+                maybe_sleep_ms
+            );
+        }
     }
 }

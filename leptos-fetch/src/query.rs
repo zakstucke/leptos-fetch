@@ -1,64 +1,30 @@
-use std::{any::TypeId, hash::Hash, time::Duration};
+use std::{any::TypeId, fmt::Debug, hash::Hash, sync::Arc, time::Duration};
 
-use leptos::prelude::{ArcRwSignal, TimeoutHandle};
+use leptos::prelude::ArcRwSignal;
+use send_wrapper::SendWrapper;
 
-use crate::{options_combine, QueryClient, QueryOptions};
+use crate::{
+    gc::{GcHandle, GcValue},
+    options_combine, QueryClient, QueryOptions,
+};
 
-#[derive(Debug)]
 pub(crate) struct Query<V> {
-    value_maybe_stale: Option<V>, // Only None with steal_value_danger_must_replace().
+    pub value_maybe_stale: GcValue<V>,
     combined_options: QueryOptions,
-    updated_at: chrono::DateTime<chrono::Utc>,
-    gc_handle: GcHandle,
+    // When None has been forcefully made stale/invalidated:
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Will always be None on the server, hence the SendWrapper is fine:
+    gc_cb: Option<Arc<SendWrapper<Box<dyn Fn()>>>>,
     pub buster: ArcRwSignal<u64>,
 }
 
-#[derive(Debug)]
-enum GcHandle {
-    None,
-    #[allow(dead_code)]
-    Wasm(TimeoutHandle),
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    #[allow(dead_code)]
-    Tokio(tokio::task::JoinHandle<()>),
-}
-
-impl GcHandle {
-    fn new(handler: impl FnOnce() + 'static, duration: Duration) -> Self {
-        #[cfg(any(not(test), target_arch = "wasm32"))]
-        {
-            let handle = leptos::prelude::set_timeout_with_handle(handler, duration).expect("TODO");
-            GcHandle::Wasm(handle)
-        }
-        #[cfg(all(test, not(target_arch = "wasm32")))]
-        {
-            // TODO not sure why this isn't working.
-            // let handle = tokio::task::spawn_local(async move {
-            //     // tokio::time::sleep(duration).await;
-            //     // handler();
-            // });
-            // GcHandle::Tokio(handle)
-            let _ = handler;
-            let _ = duration;
-            GcHandle::None
-        }
-    }
-
-    fn cancel(&mut self) {
-        match self {
-            GcHandle::None => {}
-            GcHandle::Wasm(handle) => handle.clear(),
-            #[cfg(all(test, not(target_arch = "wasm32")))]
-            GcHandle::Tokio(handle) => handle.abort(),
-        }
-        *self = GcHandle::None;
-    }
-}
-
-/// Cancel the gc cleanup timeout if the query is dropped for any reason, e.g. invalidation or replacement with something new.
-impl<V> Drop for Query<V> {
-    fn drop(&mut self) {
-        self.gc_handle.cancel();
+impl<V> Debug for Query<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Query")
+            .field("value", &std::any::type_name::<V>())
+            .field("combined_options", &self.combined_options)
+            .field("updated_at", &self.updated_at)
+            .finish()
     }
 }
 
@@ -77,56 +43,48 @@ impl<V> Query<V> {
     {
         let combined_options = options_combine(client.options(), scope_options);
 
-        let gc_handle = if cfg!(not(feature = "ssr"))
+        let gc_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.gc_time() < Duration::from_secs(60 * 60 * 24 * 365)
         {
             let key = key.clone();
-            GcHandle::new(
-                move || {
-                    client.invalidate_queries_inner::<K, V, _>(cache_key, std::iter::once(&key));
-                },
-                combined_options.gc_time(),
-            )
+            // GC is client only (non-ssr) hence can wrap in a SendWrapper:
+            Some(Arc::new(SendWrapper::new(Box::new(move || {
+                client.scope_lookup.gc_query::<K, V>(cache_key, &key);
+            }) as Box<dyn Fn()>)))
         } else {
-            GcHandle::None
+            None
         };
 
         Self {
-            value_maybe_stale: Some(value),
+            value_maybe_stale: GcValue::new(
+                value,
+                GcHandle::new(gc_cb.clone(), combined_options.gc_time()),
+            ),
             combined_options,
-            updated_at: chrono::Utc::now(),
-            gc_handle,
+            updated_at: Some(chrono::Utc::now()),
+            gc_cb,
             buster,
         }
     }
 
-    pub fn value_if_not_stale(&self) -> Option<&V> {
-        let stale_after = self.updated_at + self.combined_options.stale_time();
-        if chrono::Utc::now() > stale_after {
-            None
+    pub fn invalidate(&mut self) {
+        self.updated_at = None;
+    }
+
+    pub fn stale(&self) -> bool {
+        if let Some(updated_at) = self.updated_at {
+            let stale_after = updated_at + self.combined_options.stale_time();
+            chrono::Utc::now() > stale_after
         } else {
-            Some(
-                self.value_maybe_stale
-                    .as_ref()
-                    .expect("Query value should never be None. (bug)"),
-            )
+            true
         }
     }
 
-    pub fn value_even_if_stale(&self) -> &V {
-        self.value_maybe_stale
-            .as_ref()
-            .expect("Query value should never be None. (bug)")
-    }
-
-    pub fn steal_value_danger_must_replace(&mut self) -> V {
-        self.value_maybe_stale
-            .take()
-            .expect("Query value should never be None. (bug)")
-    }
-
     pub fn set_value(&mut self, new_value: V) {
-        self.value_maybe_stale = Some(new_value);
-        self.updated_at = chrono::Utc::now();
+        self.value_maybe_stale = GcValue::new(
+            new_value,
+            GcHandle::new(self.gc_cb.clone(), self.combined_options.gc_time()),
+        );
+        self.updated_at = Some(chrono::Utc::now());
     }
 }
