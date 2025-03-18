@@ -19,8 +19,8 @@ leptos = { path = "../leptos/leptos" }
 
 [workspace.dependencies]
 any_spawner = "0.2"
-hydration_context = "0.2"
-leptos = "0.7" # 0.8.0-alpha
+hydration_context = "0.3"
+leptos =  "0.8.0-alpha"
 
 chrono = "0.4"
 futures = "0.3"
