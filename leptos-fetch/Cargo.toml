@@ -29,11 +29,13 @@ all-features = true
 any_spawner.workspace = true
 hydration_context.workspace = true
 leptos.workspace = true
-
+futures.workspace = true
 chrono.workspace = true
 paste.workspace = true
 send_wrapper.workspace = true
 serde.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]

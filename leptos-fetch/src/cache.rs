@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use futures::lock::Mutex;
 use leptos::prelude::{ArcRwSignal, ReadValue, Set, StoredValue, Track, WriteValue};
 use send_wrapper::SendWrapper;
 
@@ -16,7 +17,7 @@ use crate::{query::Query, utils::random_u64_rolling, QueryClient, QueryOptions};
 pub(crate) struct Scope<K, V> {
     pub cache: HashMap<K, Query<V>>,
     // To make sure parallel fetches for the same key aren't happening across different resources.
-    pub fetcher_mutexes: HashMap<K, Arc<tokio::sync::Mutex<()>>>,
+    pub fetcher_mutexes: HashMap<K, Arc<Mutex<()>>>,
 }
 
 impl<K, V> Default for Scope<K, V> {
@@ -113,7 +114,7 @@ impl ScopeLookup {
         key: K,
         cache_key: TypeId,
         default_scope_cb: impl FnOnce() -> Box<dyn ScopeTrait>,
-    ) -> Arc<tokio::sync::Mutex<()>>
+    ) -> Arc<Mutex<()>>
     where
         K: Eq + std::hash::Hash + 'static,
         V: 'static,
@@ -127,7 +128,7 @@ impl ScopeLookup {
             .expect("Cache entry type mismatch.")
             .fetcher_mutexes
             .entry(key)
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
 
@@ -255,8 +256,8 @@ impl ScopeLookup {
         let fetcher_mutex =
             self.fetcher_mutex::<K, V>(key.clone(), cache_key, default_scope_cb.clone());
         let _fetcher_guard = match fetcher_mutex.try_lock() {
-            Ok(fetcher_guard) => fetcher_guard,
-            Err(_) => {
+            Some(fetcher_guard) => fetcher_guard,
+            None => {
                 // If have to wait, should check cache again in case it was fetched while waiting.
                 let fetcher_guard = fetcher_mutex.lock().await;
                 if let Some(cached) =
