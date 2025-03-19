@@ -5,7 +5,8 @@
 [<img alt="github" src="https://img.shields.io/badge/github-zakstucke/leptos--fetch-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/zakstucke/leptos-fetch)
 [<img alt="crates.io" src="https://img.shields.io/crates/v/leptos-fetch.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/leptos-fetch)
 [<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-leptos--fetch-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/leptos-fetch)
-<!-- [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/zakstucke/leptos-fetch/rust.yml?branch=main&style=for-the-badge" height="20">](https://github.com/zakstucke/leptos-fetch/actions?query=branch%3Amain) -->
+![Crates.io MSRV](https://img.shields.io/crates/msrv/leptos-fetch)
+[<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/zakstucke/leptos-fetch/rust.yml?branch=main&style=for-the-badge" height="20">](https://github.com/zakstucke/leptos-fetch/actions?query=branch%3Amain)
 
 
 <!-- [FAQ](https://github.com/zakstucke/leptos-fetch/blob/main/FAQ.md) | 
@@ -25,14 +26,9 @@ This crate provides:
 - Request de-duplication
 - Invalidation
 - Background refetching
-- ~~Refetch intervals~~
+- Refetch intervals
 - Memory management with cache lifetimes
-- ~~Cancellation~~
-- ~~Debugging tools~~
 - Optimistic updates
-- ~~Client side cache persistance (localstorage, indexdb, custom, etc.)~~
-
-Lines that have a strike through are features not currently brought over from [Leptos Query](https://github.com/gaucho-labs/leptos-query).
 
 ## Feature Flags
 <!-- - `csr` Client-side rendering: Use queries on the client. -->

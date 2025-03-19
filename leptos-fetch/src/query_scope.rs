@@ -107,6 +107,24 @@ macro_rules! define {
                 }
             }
 
+            impl<K, V> [<$name Trait>]<K, V> for &$name<K, V>
+            where
+                K: 'static,
+                V: 'static,
+            {
+                fn options(&self) -> Option<QueryOptions> {
+                    Some(self.options)
+                }
+
+                fn cache_key(&self) -> TypeId {
+                    self.query_type_id
+                }
+
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                    (self.query)(key)
+                }
+            }
+
             impl<K, V, T> [<$name Trait>]<K, V> for Arc<T>
             where
                 K: 'static,
@@ -130,6 +148,24 @@ macro_rules! define {
 }
 
 impl<K, V> QueryScopeLocalTrait<K, V> for QueryScope<K, V>
+where
+    K: 'static,
+    V: 'static,
+{
+    fn options(&self) -> Option<QueryOptions> {
+        Some(self.options)
+    }
+
+    fn cache_key(&self) -> TypeId {
+        self.query_type_id
+    }
+
+    fn query(&self, key: K) -> impl Future<Output = V> + '_ {
+        (self.query)(key)
+    }
+}
+
+impl<K, V> QueryScopeLocalTrait<K, V> for &QueryScope<K, V>
 where
     K: 'static,
     V: 'static,
