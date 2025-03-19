@@ -8,6 +8,7 @@ pub(crate) const DEFAULT_GC_TIME: Duration = Duration::from_secs(300);
 pub struct QueryOptions {
     stale_time: Option<Duration>,
     gc_time: Option<Duration>,
+    refetch_interval: Option<Duration>,
 }
 
 impl QueryOptions {
@@ -50,6 +51,15 @@ impl QueryOptions {
         self
     }
 
+    /// Set the interval after which to automatically refetch the query if there are any active resources.
+    ///
+    /// Default: No refetching
+    #[track_caller]
+    pub fn set_refetch_interval(mut self, refetch_interval: Duration) -> Self {
+        self.refetch_interval = Some(refetch_interval);
+        self
+    }
+
     /// The duration that should pass before a query is considered stale.
     ///
     /// If the query is stale, it will be refetched when it's next accessed.
@@ -65,6 +75,13 @@ impl QueryOptions {
     pub fn gc_time(&self) -> Duration {
         self.gc_time.unwrap_or(DEFAULT_GC_TIME)
     }
+
+    /// The interval (if any) after which to automatically refetch the query if there are any active resources.
+    ///
+    /// Default: No refetching
+    pub fn refetch_interval(&self) -> Option<Duration> {
+        self.refetch_interval
+    }
 }
 
 pub(crate) fn options_combine(base: QueryOptions, scope: Option<QueryOptions>) -> QueryOptions {
@@ -72,6 +89,7 @@ pub(crate) fn options_combine(base: QueryOptions, scope: Option<QueryOptions>) -
         QueryOptions {
             stale_time: scope.stale_time.or(base.stale_time),
             gc_time: scope.gc_time.or(base.gc_time),
+            refetch_interval: scope.refetch_interval.or(base.refetch_interval),
         }
     } else {
         base
