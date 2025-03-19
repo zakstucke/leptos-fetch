@@ -903,7 +903,7 @@ impl QueryClient {
         for buster in guard.values().flat_map(|scope_cache| scope_cache.busters()) {
             buster.try_set(new_buster_id());
         }
-    }    
+    }
 
     #[allow(dead_code)]
     pub(crate) fn size(&self) -> usize {

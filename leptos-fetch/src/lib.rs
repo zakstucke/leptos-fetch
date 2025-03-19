@@ -364,11 +364,21 @@ mod test {
                 assert!(!client.query_exists(&fetcher, key));
                 client.set_local_query(&fetcher, key, 1);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(1));
-                assert!(client.update_query(&fetcher, key, |value| value.map(|v| {*v = 2; true}).unwrap_or(false)));
+                assert!(client.update_query(&fetcher, key, |value| value
+                    .map(|v| {
+                        *v = 2;
+                        true
+                    })
+                    .unwrap_or(false)));
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
                 client.set_query(&fetcher, key, 3);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
-                assert!(client.update_query(&fetcher, key, |value| value.map(|v| {*v *= 2; true}).unwrap_or(false)));
+                assert!(client.update_query(&fetcher, key, |value| value
+                    .map(|v| {
+                        *v *= 2;
+                        true
+                    })
+                    .unwrap_or(false)));
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(6));
                 assert!(client.query_exists(&fetcher, key));
 
@@ -388,7 +398,6 @@ mod test {
                 client.clear();
                 assert_eq!(client.size(), 0);
                 assert_eq!(client.fetch_query(&fetcher, key).await, 6);
-
             })
             .await;
     }
@@ -477,13 +486,13 @@ mod test {
 
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);
                                 assert_eq!($get_resource().await, 4);
-                                assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);    
+                                assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);
                             }}
 
                             // Should stop refetching once all resources are dropped:
                             tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
                             tick!();
-                            assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);                            
+                            assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);
                         }
                     }};
                 }
