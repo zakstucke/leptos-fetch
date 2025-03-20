@@ -15,16 +15,16 @@ All notable changes to this project are documented in this file.
 ## [0.3.1](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.3.1)
 
 ### Added
-- Added `subscribe_is_fetching()`, `arc_subscribe_is_fetching()`, `subscribe_is_loading()`, `arc_subscribe_is_loading()` methods to the `QueryClient` for monitoring query activity.
-- Improved README
+- Added `subscribe_is_fetching()`, `arc_subscribe_is_fetching()`, `subscribe_is_loading()`, `arc_subscribe_is_loading()` methods to the `QueryClient` for monitoring query activity ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Improved README ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 
 ### Fixed
-- Fixed bug in `invalidate_query_type()` and `invalidate_all_queries()` to correctly invalidate active resources.
-- If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time`.
+- Fixed bug in `invalidate_query_type()` and `invalidate_all_queries()` to correctly invalidate active resources ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time` ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 
 ### Tests
-- Refactor
-- Test building for `--target wasm32-unknown-unknown` in CI
+- Refactor ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Test building for `--target wasm32-unknown-unknown` in CI ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 
 ## [0.3.0](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.3.0)
 
