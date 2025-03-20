@@ -2,7 +2,8 @@ use std::{any::TypeId, borrow::Borrow, future::Future, hash::Hash, sync::Arc};
 
 use leptos::{
     prelude::{
-        expect_context, provide_context, ArcMemo, ArcRwSignal, Effect, Get, Read, Set, Track,
+        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get, Read, Set,
+        Signal, Track,
     },
     server::{ArcLocalResource, ArcResource, LocalResource, Resource},
 };
@@ -55,6 +56,7 @@ impl Default for QueryClient {
 
 impl QueryClient {
     /// Creates a new [`QueryClient`].
+    #[track_caller]
     pub fn new() -> Self {
         Self {
             scope_lookup: ScopeLookup::new(),
@@ -65,6 +67,7 @@ impl QueryClient {
     /// Create a new [`QueryClient`] with custom options.
     ///
     /// These options will be combined with any options for a specific query type/scope.
+    #[track_caller]
     pub fn new_with_options(options: QueryOptions) -> Self {
         Self {
             scope_lookup: ScopeLookup::new(),
@@ -75,6 +78,7 @@ impl QueryClient {
     /// Create a new [`QueryClient`] and provide it via leptos context.
     ///
     /// The client can then be accessed with [`QueryClient::expect()`] from any child component.
+    #[track_caller]
     pub fn provide() {
         provide_context(Self::new())
     }
@@ -84,6 +88,7 @@ impl QueryClient {
     /// The client can then be accessed with [`QueryClient::expect()`] from any child component.
     ///
     /// These options will be combined with any options for a specific query type/scope.
+    #[track_caller]
     pub fn provide_with_options(options: QueryOptions) {
         provide_context(Self::new_with_options(options))
     }
@@ -103,6 +108,7 @@ impl QueryClient {
     /// Read the base [`QueryOptions`] for this [`QueryClient`].
     ///
     /// These will be combined with any options for a specific query type/scope.
+    #[track_caller]
     pub fn options(&self) -> QueryOptions {
         self.options
     }
@@ -197,6 +203,7 @@ impl QueryClient {
                             true,
                             query_options,
                             Some(resource_id),
+                            true,
                         )
                         .await
                 }
@@ -373,6 +380,7 @@ impl QueryClient {
                                     false, // tracking is done via the key fn
                                     query_options,
                                     Some(resource_id),
+                                    true,
                                 )
                                 .await
                         }
@@ -489,15 +497,15 @@ impl QueryClient {
         V: 'static,
         Fut: Future<Output = MaybeLocal<V>>,
     {
-        let (needs_prefetch, custom_next_buster) =
-            self.scope_lookup
-                .with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
-                    if let Some(cached) = maybe_cached {
-                        (cached.stale(), Some(cached.buster.clone()))
-                    } else {
-                        (true, None)
-                    }
-                });
+        let (needs_prefetch, custom_next_buster, loading_first_time) = self
+            .scope_lookup
+            .with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
+                if let Some(cached) = maybe_cached {
+                    (cached.stale(), Some(cached.buster.clone()), false)
+                } else {
+                    (true, None, true)
+                }
+            });
         if needs_prefetch {
             self.scope_lookup
                 .cached_or_fetch_inner::<K, V, _, _>(
@@ -510,6 +518,7 @@ impl QueryClient {
                     |_v| {},
                     query_options,
                     None,
+                    loading_first_time,
                 )
                 .await
         }
@@ -583,18 +592,18 @@ impl QueryClient {
         V: Clone + 'static,
         Fut: Future<Output = MaybeLocal<V>>,
     {
-        let maybe_cached = self
+        let (maybe_cached, loading_first_time) = self
             .scope_lookup
             .with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
                 maybe_cached.map(|cached| {
                     if cached.stale() {
-                        None
+                        (None, false)
                     } else {
-                        Some(cached.value_maybe_stale.value().clone())
+                        (Some(cached.value_maybe_stale.value().clone()), false)
                     }
                 })
             })
-            .flatten();
+            .unwrap_or((None, true));
         if let Some(cached) = maybe_cached {
             cached
         } else {
@@ -609,6 +618,7 @@ impl QueryClient {
                     |v| v.clone(),
                     query_options,
                     None,
+                    loading_first_time,
                 )
                 .await
         }
@@ -762,6 +772,7 @@ impl QueryClient {
     }
 
     /// Synchronously get a query from the cache, if it exists.
+    #[track_caller]
     pub fn get_cached_query<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
@@ -798,9 +809,106 @@ impl QueryClient {
         )
     }
 
-    /// Mark a query as stale. The next time it's accessed it'll be refetched.
+    /// Subscribe to the `is_loading` status of a query.
     ///
-    /// Resources actively using the query will be updated.
+    /// This is `true` when the query is in the process of fetching data for the first time.
+    /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_loading<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        key: impl Borrow<K>,
+    ) -> Signal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        self.arc_subscribe_is_loading(query_scope, key).into()
+    }
+
+    /// Subscribe to the `is_loading` status of a query.
+    ///
+    /// This is `true` when the query is in the process of fetching data for the first time.
+    /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn arc_subscribe_is_loading<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        key: impl Borrow<K>,
+    ) -> ArcSignal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        self.scope_lookup
+            .subscriptions_mut()
+            .add_is_loading_subscription(*self, query_scope.cache_key(), KeyHash::new(key.borrow()))
+    }
+
+    /// Subscribe to the `is_fetching` status of a query.
+    ///
+    /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
+    /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_fetching<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        key: impl Borrow<K>,
+    ) -> Signal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        self.arc_subscribe_is_fetching(query_scope, key).into()
+    }
+
+    /// Subscribe to the `is_fetching` status of a query.
+    ///
+    /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
+    /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn arc_subscribe_is_fetching<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        key: impl Borrow<K>,
+    ) -> ArcSignal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        let mut guard = self.scope_lookup.subscriptions_mut();
+        println!("A");
+        let result = guard.add_is_fetching_subscription(
+            *self,
+            query_scope.cache_key(),
+            KeyHash::new(key.borrow()),
+        );
+        result
+    }
+
+    /// Mark a query as stale.
+    ///
+    /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
     pub fn invalidate_query<K, V>(
         &self,
@@ -815,9 +923,9 @@ impl QueryClient {
         !cleared.is_empty()
     }
 
-    /// Mark multiple queries of a specific type as stale. The next time each query is accessed it'll be refetched.
+    /// Mark multiple queries of a specific type as stale.
     ///
-    /// Active resources using a query will be updated.
+    /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
     pub fn invalidate_queries<K, V, KRef>(
         &self,
@@ -850,7 +958,6 @@ impl QueryClient {
                     for key in keys.into_iter() {
                         if let Some(cached) = scope.get_mut(key.borrow()) {
                             cached.invalidate();
-                            cached.buster.set(new_buster_id());
                             invalidated.push(key);
                         }
                     }
@@ -859,9 +966,9 @@ impl QueryClient {
             })
     }
 
-    /// Mark all queries of a specific type as stale. The next time each query is accessed it'll be refetched.
+    /// Mark all queries of a specific type as stale.
     ///
-    /// Active resources using a query will be updated.
+    /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
     pub fn invalidate_query_type<K, V>(&self, query_scope: impl QueryScopeLocalTrait<K, V>)
     where
@@ -877,9 +984,9 @@ impl QueryClient {
         }
     }
 
-    /// Mark all queries as stale. The next time any query is accessed it'll be refetched.
+    /// Mark all queries as stale.
     ///
-    /// Active resources using a query will be updated.
+    /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
     pub fn invalidate_all_queries(&self) {
         let mut guard = self.scope_lookup.scopes_mut();
@@ -892,7 +999,9 @@ impl QueryClient {
     }
 
     /// Empty the cache, note [`QueryClient::invalidate_all_queries`] is preferred in most cases.
-    /// All active resources will instantly revert to pending until a new query is available.
+    ///
+    /// All active resources will instantly revert to pending until the new query finishes refetching.
+    ///
     /// [`QueryClient::invalidate_all_queries`] on the other hand, will only refetch active queries in the background, replacing them when ready.
     #[track_caller]
     pub fn clear(&self) {
@@ -905,12 +1014,17 @@ impl QueryClient {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn size(&self) -> usize {
         self.scope_lookup
             .scopes()
             .values()
             .map(|scope| scope.size())
             .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.scope_lookup.subscriptions_mut().count()
     }
 }

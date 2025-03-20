@@ -19,16 +19,18 @@ impl QueryOptions {
 
     /// Set the duration that should pass before a query is considered stale.
     ///
-    /// If the query is stale, it will be refetched when it's next accessed.
+    /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
     ///
-    /// To never mark as stale, set [`Duration::MAX`].
+    /// To never mark as stale, set [`std::time::Duration::MAX`].
     ///
     /// Default: `10 seconds`
     #[track_caller]
     pub fn set_stale_time(mut self, stale_time: Duration) -> Self {
         if let Some(gc_time) = self.gc_time {
+            // If stale_time is greater than gc_time, stale_time will be set to gc_time.
             if stale_time > gc_time {
-                panic!("stale_time must be less than gc_time");
+                self.stale_time = Some(gc_time);
+                return self;
             }
         }
         self.stale_time = Some(stale_time);
@@ -37,14 +39,18 @@ impl QueryOptions {
 
     /// Set the duration that should pass before an unused query is garbage collected.
     ///
-    /// To never garbage collect, set [`Duration::MAX`].
+    /// After this time, if the query isn't being used by any resources, the query will be removed from the cache, to minimise the cache's size. If the query is in active use, the gc will be scheduled to check again after the same time interval.
+    ///
+    /// To never garbage collect, set [`std::time::Duration::MAX`].
     ///
     /// Default: `5 minutes`
     #[track_caller]
     pub fn set_gc_time(mut self, gc_time: Duration) -> Self {
         if let Some(stale_time) = self.stale_time {
-            if gc_time < stale_time {
-                panic!("gc_time must be greater than stale_time");
+            if stale_time > gc_time {
+                // If stale_time is greater than gc_time, stale_time will be set to gc_time.
+                self.stale_time = Some(gc_time);
+                return self;
             }
         }
         self.gc_time = Some(gc_time);
@@ -52,6 +58,8 @@ impl QueryOptions {
     }
 
     /// Set the interval after which to automatically refetch the query if there are any active resources.
+    ///
+    /// If the query is being used by any resources, it will be invalidated and refetched in the background, updating active resources according to this interval.
     ///
     /// Default: No refetching
     #[track_caller]
@@ -62,7 +70,7 @@ impl QueryOptions {
 
     /// The duration that should pass before a query is considered stale.
     ///
-    /// If the query is stale, it will be refetched when it's next accessed.
+    /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
     ///
     /// Default: `10 seconds`
     pub fn stale_time(&self) -> Duration {
@@ -71,12 +79,16 @@ impl QueryOptions {
 
     /// The duration that should pass before an unused query is garbage collected.
     ///
+    /// After this time, if the query isn't being used by any resources, the query will be removed from the cache, to minimise the cache's size. If the query is in active use, the gc will be scheduled to check again after the same time interval.
+    ///
     /// Default: `5 minutes`
     pub fn gc_time(&self) -> Duration {
         self.gc_time.unwrap_or(DEFAULT_GC_TIME)
     }
 
     /// The interval (if any) after which to automatically refetch the query if there are any active resources.
+    ///
+    /// If the query is being used by any resources, it will be invalidated and refetched in the background, updating active resources according to this interval.
     ///
     /// Default: No refetching
     pub fn refetch_interval(&self) -> Option<Duration> {

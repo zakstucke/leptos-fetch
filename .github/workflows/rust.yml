@@ -37,3 +37,6 @@ jobs:
 
       - name: Run Tests SSR
         run: cargo test --all --features ssr
+
+      - name: Build WASM
+        run: cargo build --target wasm32-unknown-unknown

@@ -15,6 +15,7 @@ macro_rules! defined_id_gen {
 defined_id_gen!(new_resource_id);
 defined_id_gen!(new_scope_id);
 defined_id_gen!(new_buster_id);
+defined_id_gen!(new_subscription_id);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyHash(u64);
