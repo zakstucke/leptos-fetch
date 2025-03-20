@@ -266,17 +266,15 @@ mod test {
             move |key: u64| {
                 let fetch_calls = fetch_calls.clone();
                 async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_FETCHER_MS)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_FETCHER_MS))
+                        .await;
                     fetch_calls.fetch_add(1, Ordering::Relaxed);
                     key * 2
                 }
             }
         };
         (
-            QueryScope::new(
-                fetcher_src,
-                QueryOptions::new(),
-            ),
+            QueryScope::new(fetcher_src, QueryOptions::new()),
             fetch_calls,
         )
     }
@@ -857,7 +855,7 @@ mod test {
                                     assert_eq!(is_loading.get_untracked(), false);
                                 }
                             );
-                            assert_eq!(client.subscriber_count(), 0);                            
+                            assert_eq!(client.subscriber_count(), 0);
                         }
                     }};
                 }
