@@ -126,22 +126,6 @@ impl QueryClient {
         K: Eq + Hash + Clone + 'static,
         V: Clone + 'static,
     {
-        self.arc_local_resource(query_scope, keyer).into()
-    }
-
-    /// Query with [`ArcLocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
-    ///
-    /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
-    #[track_caller]
-    pub fn arc_local_resource<K, V>(
-        &self,
-        query_scope: impl QueryScopeLocalTrait<K, V> + 'static,
-        keyer: impl Fn() -> K + 'static,
-    ) -> ArcLocalResource<V>
-    where
-        K: Eq + Hash + Clone + 'static,
-        V: Clone + 'static,
-    {
         let client = *self;
         let scope_lookup = self.scope_lookup;
         let cache_key = query_scope.cache_key();
@@ -153,7 +137,7 @@ impl QueryClient {
         // To call .mark_resource_dropped() when the resource is dropped:
         let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
 
-        let resource = ArcLocalResource::new({
+        LocalResource::new({
             move || {
                 let query_scope = query_scope.clone();
                 let key = keyer();
@@ -208,9 +192,26 @@ impl QueryClient {
                         .await
                 }
             }
-        });
+        })
+    }
 
-        resource
+    /// Query with [`ArcLocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
+    ///
+    /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
+    #[track_caller]
+    pub fn arc_local_resource<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V> + 'static,
+        keyer: impl Fn() -> K + 'static,
+    ) -> ArcLocalResource<V>
+    where
+        K: Eq + Hash + Clone + 'static,
+        V: Clone + 'static,
+    {
+        // TODO on next 0.7 + 0.8 release, switch back to the arc as the base not the signal one:
+        // https://github.com/leptos-rs/leptos/pull/3740
+        // https://github.com/leptos-rs/leptos/pull/3741
+        self.local_resource(query_scope, keyer).into()
     }
 
     /// Query with [`Resource`].

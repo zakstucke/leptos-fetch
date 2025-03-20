@@ -21,9 +21,10 @@ All notable changes to this project are documented in this file.
 ### Fixed
 - Fixed bug in `invalidate_query_type()` and `invalidate_all_queries()` to correctly invalidate active resources ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time` ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Workaround leptos bug with `ArcLocalResource` until they release a new version ([#5](https://github.com/zakstucke/leptos-fetch/pull/5))
 
 ### Tests
-- Refactor ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Refactor ([#3](https://github.com/zakstucke/leptos-fetch/pull/3)) ([#5](https://github.com/zakstucke/leptos-fetch/pull/5))
 - Test building for `--target wasm32-unknown-unknown` in CI ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - Fixed non-deterministic test failure ([#4](https://github.com/zakstucke/leptos-fetch/pull/4))
 
