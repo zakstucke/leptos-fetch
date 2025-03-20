@@ -13,6 +13,7 @@ use send_wrapper::SendWrapper;
 use crate::{
     maybe_local::MaybeLocal,
     query::Query,
+    subscriptions::Subscriptions,
     utils::{new_buster_id, new_scope_id, KeyHash},
     QueryClient, QueryOptions,
 };
@@ -22,7 +23,7 @@ pub(crate) struct Scope<K, V> {
     threadsafe_cache: HashMap<KeyHash, Query<V>>,
     local_caches: HashMap<ThreadId, HashMap<KeyHash, Query<V>>>,
     // To make sure parallel fetches for the same key aren't happening across different resources.
-    pub fetcher_mutexes: HashMap<KeyHash, Arc<futures::lock::Mutex<()>>>,
+    fetcher_mutexes: HashMap<KeyHash, Arc<futures::lock::Mutex<()>>>,
     _k: std::marker::PhantomData<SendWrapper<K>>,
 }
 
@@ -38,10 +39,6 @@ impl<K, V> Default for Scope<K, V> {
 }
 
 impl<K, V> Scope<K, V> {
-    fn all_caches(&self) -> impl Iterator<Item = &HashMap<KeyHash, Query<V>>> {
-        std::iter::once(&self.threadsafe_cache).chain(self.local_caches.values())
-    }
-
     fn all_queries(&self) -> impl Iterator<Item = &Query<V>> {
         self.threadsafe_cache.values().chain(
             self.local_caches
@@ -188,6 +185,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clear(&mut self);
+    #[cfg(test)]
     fn size(&self) -> usize;
 }
 
@@ -209,8 +207,12 @@ where
         self.local_caches.clear();
     }
 
+    #[cfg(test)]
     fn size(&self) -> usize {
-        self.all_caches().map(|cache| cache.len()).sum()
+        std::iter::once(&self.threadsafe_cache)
+            .chain(self.local_caches.values())
+            .map(|cache| cache.len())
+            .sum()
     }
 }
 
@@ -226,13 +228,20 @@ pub(crate) struct ScopeLookup {
 }
 
 type Scopes = HashMap<TypeId, Box<dyn ScopeTrait>>;
+
 static SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
     LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
+
+static SUBSCRIPTION_LOOKUPS: LazyLock<parking_lot::Mutex<HashMap<u64, Subscriptions>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 impl ScopeLookup {
     pub fn new() -> Self {
         let scope_id = new_scope_id();
         SCOPE_LOOKUPS.write().insert(scope_id, HashMap::new());
+        SUBSCRIPTION_LOOKUPS
+            .lock()
+            .insert(scope_id, Subscriptions::default());
         Self { scope_id }
     }
 
@@ -252,6 +261,17 @@ impl ScopeLookup {
             SCOPE_LOOKUPS.write(),
             |scope_lookups: &mut HashMap<u64, Scopes>| {
                 scope_lookups
+                    .get_mut(&self.scope_id)
+                    .expect("Scope not found (bug)")
+            },
+        )
+    }
+
+    pub fn subscriptions_mut(&self) -> parking_lot::MappedMutexGuard<'_, Subscriptions> {
+        parking_lot::MutexGuard::map(
+            SUBSCRIPTION_LOOKUPS.lock(),
+            |sub_lookups: &mut HashMap<u64, Subscriptions>| {
+                sub_lookups
                     .get_mut(&self.scope_id)
                     .expect("Scope not found (bug)")
             },
@@ -377,6 +397,7 @@ impl ScopeLookup {
         track: bool,
         scope_options: Option<QueryOptions>,
         resource_id: Option<u64>,
+        loading_first_time: bool,
     ) -> V
     where
         K: Eq + Hash + Clone + 'static,
@@ -393,6 +414,7 @@ impl ScopeLookup {
             |v| v.clone(),
             scope_options,
             resource_id,
+            loading_first_time,
         )
         .await
     }
@@ -408,6 +430,7 @@ impl ScopeLookup {
         return_cb: impl FnOnce(&V) -> T + Clone,
         scope_options: Option<QueryOptions>,
         resource_id: Option<u64>,
+        loading_first_time: bool,
     ) -> T
     where
         K: Eq + Hash + Clone + 'static,
@@ -455,7 +478,13 @@ impl ScopeLookup {
             }
         };
 
+        let key_hash = KeyHash::new(key);
+
+        self.subscriptions_mut()
+            .notify_fetching_start(cache_key, key_hash, loading_first_time);
         let new_value = fetcher(key.clone()).await;
+        self.subscriptions_mut()
+            .notify_fetching_finish(cache_key, key_hash, loading_first_time);
 
         let next_buster = custom_next_buster.unwrap_or_else(|| ArcRwSignal::new(new_buster_id()));
 
@@ -466,12 +495,10 @@ impl ScopeLookup {
         let return_value = return_cb(new_value.value());
 
         self.with_cached_scope_mut::<K, _, _>(cache_key, true, |scope| {
-            let key = KeyHash::new(key);
-
             let query = Query::new::<K>(
                 *client,
                 cache_key,
-                &key,
+                &key_hash,
                 new_value,
                 next_buster.clone(),
                 scope_options,
@@ -480,7 +507,7 @@ impl ScopeLookup {
             if let Some(resource_id) = resource_id {
                 query.mark_resource_active(resource_id);
             }
-            scope.expect("provided a default").insert(key, query);
+            scope.expect("provided a default").insert(key_hash, query);
         });
 
         // If we're replacing an existing item in the cache, need to invalidate anything using it:

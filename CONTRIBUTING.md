@@ -4,7 +4,7 @@ Thanks for your interesting in contributing to Leptos Fetch!
 
 ## Before Submitting a PR
 
-Any new features should have some sort of tests added, these all currently sit in the `lib.rs` file.
+Any new features should have some sort of tests included.
 
 To pass CI, you can test your changes locally with:
 - `cargo fmt`

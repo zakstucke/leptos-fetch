@@ -86,7 +86,6 @@ impl<V> Query<V> {
                         if let Some(scope) = maybe_scope {
                             if let Some(cached) = scope.get_mut_with_key_hash(&key) {
                                 cached.invalidate();
-                                cached.buster.set(new_buster_id());
                             }
                         }
                     },
@@ -121,6 +120,8 @@ impl<V> Query<V> {
 
     pub fn invalidate(&mut self) {
         self.updated_at = None;
+        // To re-trigger all active resources automatically on manual invalidation:
+        self.buster.set(new_buster_id());
     }
 
     pub fn stale(&self) -> bool {

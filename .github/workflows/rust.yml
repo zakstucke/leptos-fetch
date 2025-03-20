@@ -37,3 +37,9 @@ jobs:
 
       - name: Run Tests SSR
         run: cargo test --all --features ssr
+
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build wasm
+        run: cargo build --target wasm32-unknown-unknown

@@ -40,3 +40,4 @@ any_spawner = { workspace = true, features = ["tokio"] }
 hydration_context.workspace = true
 rstest = "0.25"
 tokio = { version = "1", features = ["full"] }
+parking_lot = {workspace = true, features = ["deadlock_detection"] }
