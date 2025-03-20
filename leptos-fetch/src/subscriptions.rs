@@ -84,14 +84,12 @@ impl Subscriptions {
     where
         T: Clone + Send + Sync + 'static,
     {
-        println!("B");
         let subs = self
             .subs
             .entry(cache_key)
             .or_default()
             .entry(key)
             .or_default();
-        println!("C");
 
         // Use an existing one if available:
         for sub in subs.values() {
@@ -106,12 +104,8 @@ impl Subscriptions {
             }
         }
 
-        println!("D");
-
         let signal = new_signal();
-        println!("E");
         let sub_id = new_subscription_id();
-        println!("F");
         // By including the guard in the derived signal, we can hook into the signal itself being dropped, at which point we can GC the subscriber.
         let new_sub_guard = Arc::new(SubDropGuard {
             client,
@@ -119,13 +113,9 @@ impl Subscriptions {
             key,
             sub_id,
         });
-        println!("G");
         let new_sub = Sub::new(new_variant(signal.clone()), &new_sub_guard);
-        println!("H");
         subs.insert(sub_id, new_sub);
-        println!("I");
         ArcSignal::derive(move || {
-            println!("INNER RUNNING!");
             let _ = new_sub_guard.clone(); // Forces the closure to hold onto the guard until the closure itself is dropped.
             signal.get()
         })
@@ -160,7 +150,6 @@ impl Subscriptions {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:
                             if !signal.get_untracked() {
-                                println!("Setting fetching to true");
                                 signal.set(true);
                             }
                         }
@@ -168,7 +157,6 @@ impl Subscriptions {
                             if loading_first_time {
                                 // Don't want to trigger if not changing:
                                 if !signal.get_untracked() {
-                                    println!("Setting loading to true");
                                     signal.set(true);
                                 }
                             }
@@ -193,7 +181,6 @@ impl Subscriptions {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:
                             if signal.get_untracked() {
-                                println!("Setting fetching to false");
                                 signal.set(false);
                             }
                         }
@@ -201,7 +188,6 @@ impl Subscriptions {
                             if loading_first_time {
                                 // Don't want to trigger if not changing:
                                 if signal.get_untracked() {
-                                    println!("Setting loading to false");
                                     signal.set(false);
                                 }
                             }
@@ -251,7 +237,6 @@ struct SubDropGuard {
 
 impl Drop for SubDropGuard {
     fn drop(&mut self) {
-        println!("DROPPING!");
         self.client
             .scope_lookup
             .subscriptions_mut()

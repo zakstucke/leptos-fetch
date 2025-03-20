@@ -25,6 +25,7 @@ All notable changes to this project are documented in this file.
 ### Tests
 - Refactor ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - Test building for `--target wasm32-unknown-unknown` in CI ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Fixed non-deterministic test failure ([#4](https://github.com/zakstucke/leptos-fetch/pull/4))
 
 ## [0.3.0](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.3.0)
 

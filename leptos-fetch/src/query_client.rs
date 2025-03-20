@@ -897,13 +897,11 @@ impl QueryClient {
         V: 'static,
     {
         let mut guard = self.scope_lookup.subscriptions_mut();
-        println!("A");
-        let result = guard.add_is_fetching_subscription(
+        guard.add_is_fetching_subscription(
             *self,
             query_scope.cache_key(),
             KeyHash::new(key.borrow()),
-        );
-        result
+        )
     }
 
     /// Mark a query as stale.
