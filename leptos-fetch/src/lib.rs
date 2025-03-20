@@ -216,6 +216,7 @@ mod test {
             // Executor::poll_local();
             // futures::executor::block_on(Executor::tick());
             Executor::tick().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         };
     }
 
@@ -736,7 +737,7 @@ mod test {
                                 },
                                 async {
                                     let elapsed = std::time::Instant::now();
-                                    tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                    tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
                                         assert_eq!(is_fetching_copy.get_untracked(), true);
@@ -744,7 +745,7 @@ mod test {
                                         assert_eq!(is_loading.get_untracked(), true);
                                         assert_eq!(is_loading_copy.get_untracked(), true);
                                         assert_eq!(is_loading_other.get_untracked(), false);
-                                        tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                        tick!();
                                     }
                                 }
                             );
@@ -764,10 +765,10 @@ mod test {
                                 },
                                 async {
                                     let elapsed = std::time::Instant::now();
-                                    tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                    tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         check_all!(false);
-                                        tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                        tick!();
                                     }
                                 }
                             );
@@ -784,7 +785,7 @@ mod test {
                                 },
                                 async {
                                     let elapsed = std::time::Instant::now();
-                                    tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                    tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
                                         assert_eq!(is_fetching_copy.get_untracked(), true);
@@ -794,7 +795,7 @@ mod test {
                                         assert_eq!(is_loading.get_untracked(), false);
                                         assert_eq!(is_loading_copy.get_untracked(), false);
                                         assert_eq!(is_loading_other.get_untracked(), false);
-                                        tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                        tick!();
                                     }
                                 }
                             );
@@ -823,7 +824,7 @@ mod test {
                                     assert_eq!($get_resource().await, 4);
                                 },
                                 async {
-                                    tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                    tick!();
                                     let is_fetching = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
                                     let is_loading = client.arc_subscribe_is_loading(fetcher.clone(), &2);
                                     assert_eq!(client.subscriber_count(), 2);
@@ -844,7 +845,7 @@ mod test {
                                     tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                                 },
                                 async {
-                                    tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+                                    tick!();
                                     let is_fetching = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
                                     let is_loading = client.arc_subscribe_is_loading(fetcher.clone(), &2);
                                     assert_eq!(client.subscriber_count(), 2);
@@ -1000,7 +1001,6 @@ mod test {
 
                             // Until the new fetch has completed, the old should still be returned:
                             tick!();
-                            tokio::time::sleep(std::time::Duration::from_millis(0)).await;
                             // TODO remove the local resource once 0.8 if check here and switch these checks to .get() from .await, as we're really trying to test lifecycle.
                             // seems there's a different future/.await handling between local and normal resources that breaks the test but not actually important.
                             if resource_type != ResourceType::Local {
