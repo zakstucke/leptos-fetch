@@ -5,6 +5,7 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Updated readme ([#8](https://github.com/zakstucke/leptos-fetch/pull/8))
 
 ### Fixed
 
