@@ -6,14 +6,13 @@ use std::{
 
 use leptos::prelude::{ArcRwSignal, ArcSignal, Get, GetUntracked, Set};
 
-use crate::{
-    utils::{new_subscription_id, KeyHash},
-    QueryClient,
-};
+use crate::utils::{new_subscription_id, KeyHash};
+
+type Subs = Arc<parking_lot::Mutex<HashMap<TypeId, HashMap<u64, Sub>>>>;
 
 #[derive(Debug, Default)]
 pub(crate) struct Subscriptions {
-    subs: HashMap<TypeId, HashMap<KeyHash, HashMap<u64, Sub>>>,
+    subs: Subs,
     // Used to initialise as true when a subscriber is created whilst a fetch is ongoing:
     // (bool = loading_first_time)
     actively_fetching: HashMap<(TypeId, KeyHash), bool>,
@@ -22,15 +21,15 @@ pub(crate) struct Subscriptions {
 impl Subscriptions {
     pub fn add_is_fetching_subscription(
         &mut self,
-        client: QueryClient,
         cache_key: TypeId,
-        key: KeyHash,
+        keyer: ArcSignal<KeyHash>,
     ) -> ArcSignal<bool> {
-        let initial = self.actively_fetching.contains_key(&(cache_key, key));
+        let initial = self
+            .actively_fetching
+            .contains_key(&(cache_key, keyer.get_untracked()));
         self.add_subscription(
-            client,
             cache_key,
-            key,
+            keyer,
             |sub| {
                 if let SubVariant::IsFetching(signal) = &sub.variant {
                     Some(signal)
@@ -38,28 +37,28 @@ impl Subscriptions {
                     None
                 }
             },
-            || ArcRwSignal::new(initial),
+            move || ArcRwSignal::new(initial),
             SubVariant::IsFetching,
         )
     }
 
     pub fn add_is_loading_subscription(
         &mut self,
-        client: QueryClient,
         cache_key: TypeId,
-        key: KeyHash,
+        keyer: ArcSignal<KeyHash>,
     ) -> ArcSignal<bool> {
-        let initial =
-            if let Some(loading_first_time) = self.actively_fetching.get(&(cache_key, key)) {
-                *loading_first_time
-            } else {
-                false
-            };
+        let initial = if let Some(loading_first_time) = self
+            .actively_fetching
+            .get(&(cache_key, keyer.get_untracked()))
+        {
+            *loading_first_time
+        } else {
+            false
+        };
 
         self.add_subscription(
-            client,
             cache_key,
-            key,
+            keyer,
             |sub| {
                 if let SubVariant::IsLoading(signal) = &sub.variant {
                     Some(signal)
@@ -67,72 +66,57 @@ impl Subscriptions {
                     None
                 }
             },
-            || ArcRwSignal::new(initial),
+            move || ArcRwSignal::new(initial),
             SubVariant::IsLoading,
         )
     }
 
     fn add_subscription<T>(
         &mut self,
-        client: QueryClient,
         cache_key: TypeId,
-        key: KeyHash,
-        match_existing: impl Fn(&Sub) -> Option<&ArcRwSignal<T>>,
-        new_signal: impl Fn() -> ArcRwSignal<T>,
-        new_variant: impl Fn(ArcRwSignal<T>) -> SubVariant,
+        keyer: ArcSignal<KeyHash>,
+        match_existing: impl Fn(&Sub) -> Option<&ArcRwSignal<T>> + Send + Sync + 'static,
+        new_signal: impl Fn() -> ArcRwSignal<T> + Send + Sync + 'static,
+        new_variant: impl Fn(ArcRwSignal<T>) -> SubVariant + Send + Sync + 'static,
     ) -> ArcSignal<T>
     where
         T: Clone + Send + Sync + 'static,
     {
-        let subs = self
-            .subs
-            .entry(cache_key)
-            .or_default()
-            .entry(key)
-            .or_default();
-
-        // Use an existing one if available:
-        for sub in subs.values() {
-            if let Some(signal) = match_existing(sub) {
-                if let Some(sub_guard) = sub.drop_guard.upgrade() {
-                    let signal = signal.clone();
-                    return ArcSignal::derive(move || {
-                        let _ = sub_guard.clone(); // Forces the closure to hold onto the guard until the closure itself is dropped.
-                        signal.get()
-                    });
-                }
-            }
-        }
-
-        let signal = new_signal();
-        let sub_id = new_subscription_id();
-        // By including the guard in the derived signal, we can hook into the signal itself being dropped, at which point we can GC the subscriber.
-        let new_sub_guard = Arc::new(SubDropGuard {
-            client,
-            cache_key,
-            key,
-            sub_id,
-        });
-        let new_sub = Sub::new(new_variant(signal.clone()), &new_sub_guard);
-        subs.insert(sub_id, new_sub);
+        let subs_arc = self.subs.clone();
+        let sub_guard_holder = parking_lot::Mutex::new(None);
         ArcSignal::derive(move || {
-            let _ = new_sub_guard.clone(); // Forces the closure to hold onto the guard until the closure itself is dropped.
-            signal.get()
-        })
-    }
+            // Making sure not to hold the subs lock when replacing the value in sub_guard_holder (for it's use in the Drop impl):
+            let (return_value, new_sub_guard) = (|| {
+                let key = keyer.get();
+                let mut subs_guard = subs_arc.lock();
+                let subs = subs_guard.entry(cache_key).or_default();
 
-    pub fn gc_sub(&mut self, cache_key: TypeId, key: KeyHash, sub_id: u64) {
-        if let Some(scope) = self.subs.get_mut(&cache_key) {
-            if let Some(subs) = scope.get_mut(&key) {
-                subs.remove(&sub_id);
-                if subs.is_empty() {
-                    scope.remove(&key);
+                // Use an existing one if available:
+                for sub in subs.values() {
+                    if sub.key_hash.get_untracked() == key {
+                        if let Some(signal) = match_existing(sub) {
+                            if let Some(sub_guard) = sub.drop_guard.upgrade() {
+                                return (signal.get(), sub_guard);
+                            }
+                        }
+                    }
                 }
-            }
-            if scope.is_empty() {
-                self.subs.remove(&cache_key);
-            }
-        }
+                let signal = new_signal();
+                let sub_id = new_subscription_id();
+                // By including the guard in the derived signal, we can hook into the signal itself being dropped, at which point we can GC the subscriber.
+                let new_sub_guard = Arc::new(SubDropGuard {
+                    subs: subs_arc.clone(),
+                    cache_key,
+                    sub_id,
+                });
+                let new_sub = Sub::new(new_variant(signal.clone()), keyer.clone(), &new_sub_guard);
+                subs.insert(sub_id, new_sub);
+                (signal.get(), new_sub_guard)
+            })();
+            // By including the guard in the derived signal, we can hook into the signal itself being dropped, at which point we can GC the subscriber:
+            sub_guard_holder.lock().replace(new_sub_guard);
+            return_value
+        })
     }
 
     pub fn notify_fetching_start(
@@ -143,9 +127,9 @@ impl Subscriptions {
     ) {
         self.actively_fetching
             .insert((cache_key, key), loading_first_time);
-        if let Some(scope) = self.subs.get_mut(&cache_key) {
-            if let Some(subs) = scope.get_mut(&key) {
-                for sub in subs.values() {
+        if let Some(subs) = self.subs.lock().get_mut(&cache_key) {
+            for sub in subs.values() {
+                if sub.key_hash.get_untracked() == key {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:
@@ -174,9 +158,9 @@ impl Subscriptions {
         loading_first_time: bool,
     ) {
         self.actively_fetching.remove(&(cache_key, key));
-        if let Some(scope) = self.subs.get_mut(&cache_key) {
-            if let Some(subs) = scope.get_mut(&key) {
-                for sub in subs.values() {
+        if let Some(subs) = self.subs.lock().get_mut(&cache_key) {
+            for sub in subs.values() {
+                if sub.key_hash.get_untracked() == key {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:
@@ -200,23 +184,26 @@ impl Subscriptions {
 
     #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
-        self.subs
-            .values()
-            .flat_map(|v| v.values().map(|v| v.len()))
-            .sum()
+        self.subs.lock().values().map(|v| v.len()).sum()
     }
 }
 
 #[derive(Debug)]
 struct Sub {
     variant: SubVariant,
+    key_hash: ArcSignal<KeyHash>,
     drop_guard: Weak<SubDropGuard>,
 }
 
 impl Sub {
-    fn new(variant: SubVariant, drop_guard: &Arc<SubDropGuard>) -> Self {
+    fn new(
+        variant: SubVariant,
+        key_hash: ArcSignal<KeyHash>,
+        drop_guard: &Arc<SubDropGuard>,
+    ) -> Self {
         Self {
             variant,
+            key_hash,
             drop_guard: Arc::downgrade(drop_guard),
         }
     }
@@ -231,15 +218,17 @@ enum SubVariant {
 struct SubDropGuard {
     sub_id: u64,
     cache_key: TypeId,
-    key: KeyHash,
-    client: QueryClient,
+    subs: Subs,
 }
 
 impl Drop for SubDropGuard {
     fn drop(&mut self) {
-        self.client
-            .scope_lookup
-            .subscriptions_mut()
-            .gc_sub(self.cache_key, self.key, self.sub_id);
+        let mut subs_guard = self.subs.lock();
+        if let Some(subs) = subs_guard.get_mut(&self.cache_key) {
+            subs.remove(&self.sub_id);
+            if subs.is_empty() {
+                subs_guard.remove(&self.cache_key);
+            }
+        }
     }
 }

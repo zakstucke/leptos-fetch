@@ -2,8 +2,8 @@ use std::{any::TypeId, borrow::Borrow, future::Future, hash::Hash, sync::Arc};
 
 use leptos::{
     prelude::{
-        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get, Read, Set,
-        Signal, Track,
+        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get,
+        Read, Set, Signal, Track,
     },
     server::{ArcLocalResource, ArcResource, LocalResource, Resource},
 };
@@ -144,8 +144,6 @@ impl QueryClient {
                 let drop_guard = drop_guard.clone();
                 drop_guard.set_active_key(key.clone());
                 async move {
-                    let _ = drop_guard; // Want the guard around everywhere until the resource is dropped.
-
                     // First try using the cache:
                     if let Some(cached) = scope_lookup.with_cached_query::<K, V, _>(
                         &key,
@@ -162,7 +160,7 @@ impl QueryClient {
                                     let query_scope = query_scope.clone();
                                     // Just adding the SendWrapper and using spawn() rather than spawn_local() to fix tests:
                                     leptos::task::spawn(SendWrapper::new(async move {
-                                        client.prefetch_local_query(query_scope, &key).await;
+                                        client.prefetch_query_local(query_scope, &key).await;
                                     }));
                                 }
 
@@ -344,10 +342,8 @@ impl QueryClient {
                 move |(key, _)| {
                     let query_scope = query_scope.clone();
                     let next_buster = next_buster.clone();
-                    let drop_guard = drop_guard.clone();
+                    let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
                     async move {
-                        let _ = drop_guard; // Want the guard around everywhere until the resource is dropped.
-
                         if let Some(cached) = scope_lookup.with_cached_query::<K, V, _>(
                             &key,
                             &cache_key,
@@ -469,7 +465,7 @@ impl QueryClient {
     /// - Entry exists but stale: not refreshed, existing cache item remains.
     ///
     /// If the cached query changes, active resources using the query will be updated.
-    pub async fn prefetch_local_query<K, V>(
+    pub async fn prefetch_query_local<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
         key: impl Borrow<K>,
@@ -562,7 +558,7 @@ impl QueryClient {
     /// If the cached query changes, active resources using the query will be updated.
     ///
     /// Returns the up-to-date cached query.
-    pub async fn fetch_local_query<K, V>(
+    pub async fn fetch_query_local<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
         key: impl Borrow<K>,
@@ -652,7 +648,7 @@ impl QueryClient {
     ///
     /// Active resources using the query will be updated.
     #[track_caller]
-    pub fn set_local_query<K, V>(
+    pub fn set_query_local<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
         key: impl Borrow<K>,
@@ -811,6 +807,7 @@ impl QueryClient {
     }
 
     /// Subscribe to the `is_loading` status of a query.
+    /// The keyer function is reactive to changes in `K`.
     ///
     /// This is `true` when the query is in the process of fetching data for the first time.
     /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
@@ -823,16 +820,17 @@ impl QueryClient {
     pub fn subscribe_is_loading<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
-        key: impl Borrow<K>,
+        keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Eq + Hash + Send + Sync + 'static,
         V: 'static,
     {
-        self.arc_subscribe_is_loading(query_scope, key).into()
+        self.subscribe_is_loading_arc(query_scope, keyer).into()
     }
 
-    /// Subscribe to the `is_loading` status of a query.
+    /// Subscribe to the `is_loading` status of a query with a non-threadsafe key.
+    /// The keyer function is reactive to changes in `K`.
     ///
     /// This is `true` when the query is in the process of fetching data for the first time.
     /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
@@ -842,21 +840,81 @@ impl QueryClient {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn arc_subscribe_is_loading<K, V>(
+    pub fn subscribe_is_loading_local<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
-        key: impl Borrow<K>,
+        keyer: impl Fn() -> K + 'static,
+    ) -> Signal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        self.subscribe_is_loading_arc_local(query_scope, keyer).into()
+    }
+
+    /// Subscribe to the `is_loading` status of a query with a non-threadsafe key.
+    /// The keyer function is reactive to changes in `K`.
+    ///
+    /// This is `true` when the query is in the process of fetching data for the first time.
+    /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_loading_arc_local<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
         K: Eq + Hash + 'static,
         V: 'static,
     {
+        if cfg!(feature = "ssr") {
+            ArcSignal::derive(|| true)
+        } else {
+            let keyer = SendWrapper::new(keyer);
+            self.scope_lookup
+                .subscriptions_mut()
+                .add_is_loading_subscription(
+                    query_scope.cache_key(),
+                    ArcSignal::derive(move || KeyHash::new(&keyer())),
+                )
+        }
+    }    
+
+    /// Subscribe to the `is_loading` status of a query.
+    /// The keyer function is reactive to changes in `K`.
+    ///
+    /// This is `true` when the query is in the process of fetching data for the first time.
+    /// This is in contrast to `is_fetching`, that is `true` whenever the query is fetching data, including when it's refetching.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_loading_arc<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        keyer: impl Fn() -> K + Send + Sync + 'static,
+    ) -> ArcSignal<bool>
+    where
+        K: Eq + Hash + Send + Sync + 'static,
+        V: 'static,
+    {
         self.scope_lookup
             .subscriptions_mut()
-            .add_is_loading_subscription(*self, query_scope.cache_key(), KeyHash::new(key.borrow()))
+            .add_is_loading_subscription(
+                query_scope.cache_key(),
+                ArcSignal::derive(move || KeyHash::new(&keyer())),
+            )
     }
 
     /// Subscribe to the `is_fetching` status of a query.
+    /// The keyer function is reactive to changes in `K`.
     ///
     /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
     /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
@@ -869,16 +927,17 @@ impl QueryClient {
     pub fn subscribe_is_fetching<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
-        key: impl Borrow<K>,
+        keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Eq + Hash + Send + Sync + 'static,
         V: 'static,
     {
-        self.arc_subscribe_is_fetching(query_scope, key).into()
+        self.subscribe_is_fetching_arc(query_scope, keyer).into()
     }
 
-    /// Subscribe to the `is_fetching` status of a query.
+    /// Subscribe to the `is_fetching` status of a query with a non-threadsafe key.
+    /// The keyer function is reactive to changes in `K`.
     ///
     /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
     /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
@@ -888,20 +947,75 @@ impl QueryClient {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn arc_subscribe_is_fetching<K, V>(
+    pub fn subscribe_is_fetching_local<K, V>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V>,
-        key: impl Borrow<K>,
+        keyer: impl Fn() -> K + 'static,
+    ) -> Signal<bool>
+    where
+        K: Eq + Hash + 'static,
+        V: 'static,
+    {
+        self.subscribe_is_fetching_arc_local(query_scope, keyer).into()
+    }    
+
+    /// Subscribe to the `is_fetching` status of a query with a non-threadsafe key.
+    /// The keyer function is reactive to changes in `K`.
+    ///
+    /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
+    /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_fetching_arc_local<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
         K: Eq + Hash + 'static,
         V: 'static,
     {
+        if cfg!(feature = "ssr") {
+            ArcSignal::derive(|| true)
+        } else {
+            let keyer = SendWrapper::new(keyer);
+            self.scope_lookup
+                .subscriptions_mut()
+                .add_is_fetching_subscription(
+                    query_scope.cache_key(),
+                    ArcSignal::derive(move || KeyHash::new(&keyer())),
+                )
+        }
+    }        
+
+    /// Subscribe to the `is_fetching` status of a query.
+    /// The keyer function is reactive to changes in `K`.
+    ///
+    /// This is `true` is `true` whenever the query is fetching data, including when it's refetching.
+    /// This is in contrast to `is_loading`, that is `true` when the query is in the process of fetching data for the first time only.
+    ///
+    /// From a resource perspective:
+    /// - `is_loading=true`, the resource will be in a pending state until ready and implies `is_fetching=true`
+    /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
+    /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
+    #[track_caller]
+    pub fn subscribe_is_fetching_arc<K, V>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        keyer: impl Fn() -> K + Send + Sync + 'static,
+    ) -> ArcSignal<bool>
+    where
+        K: Eq + Hash + Send + Sync + 'static,
+        V: 'static,
+    {
         let mut guard = self.scope_lookup.subscriptions_mut();
         guard.add_is_fetching_subscription(
-            *self,
             query_scope.cache_key(),
-            KeyHash::new(key.borrow()),
+            ArcSignal::derive(move || KeyHash::new(&keyer())),
         )
     }
 
