@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### BREAKING
 - Changes required for the custom codec feature for correct type inferrence. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
-    - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::set_options(self) -> Self` is available as a builder method, e.g. `QueryClient::new().set_options(..)`. 
+    - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::set_options(self, options) -> Self` is available as a builder method, e.g. `QueryClient::new().set_options(..)`. 
     - `QueryClient::provide()` replaced with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
     - `QueryClient::expect()` removed, `expect_context::<QueryClient>()` directly from leptos should be used instead. 
 - Subscriptions: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
