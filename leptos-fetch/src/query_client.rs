@@ -1,14 +1,13 @@
-use std::{any::TypeId, borrow::Borrow, future::Future, hash::Hash, sync::Arc};
+use std::{any::TypeId, borrow::Borrow, fmt::Debug, future::Future, hash::Hash, sync::Arc};
 
+use codee::{string::JsonSerdeCodec, Decoder, Encoder};
 use leptos::{
-    prelude::{
-        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get, Read, Set,
-        Signal, Track,
+    prelude::{provide_context, ArcRwSignal, ArcSignal, Effect, Get, Read, Set, Signal, Track},
+    server::{
+        ArcLocalResource, ArcResource, FromEncodedStr, IntoEncodedString, LocalResource, Resource,
     },
-    server::{ArcLocalResource, ArcResource, LocalResource, Resource},
 };
 use send_wrapper::SendWrapper;
-use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
     maybe_local::MaybeLocal,
@@ -32,77 +31,114 @@ use super::cache::ScopeLookup;
 ///
 /// #[component]
 /// pub fn App() -> impl IntoView {
-///    QueryClient::provide();
+///    QueryClient::new().provide();
 ///     // ...
 /// }
 ///
 /// #[component]
 /// pub fn MyComponent() -> impl IntoView {
-///     let client = QueryClient::expect();
+///     let client: QueryClient = expect_context();
 ///      // ...
 /// }
 /// ```
-#[derive(Debug, Clone, Copy)]
-pub struct QueryClient {
+#[derive(Debug)]
+pub struct QueryClient<Codec = JsonSerdeCodec> {
     pub(crate) scope_lookup: ScopeLookup,
     options: QueryOptions,
+    _ser: std::marker::PhantomData<SendWrapper<Codec>>,
 }
 
-impl Default for QueryClient {
+impl<Codec: 'static> Clone for QueryClient<Codec> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Codec: 'static> Copy for QueryClient<Codec> {}
+
+impl Default for QueryClient<JsonSerdeCodec> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl QueryClient {
-    /// Creates a new [`QueryClient`].
+impl QueryClient<JsonSerdeCodec> {
+    /// Creates a new [`QueryClient`] with the default codec: [`codee::string::JsonSerdeCodec`].
+    ///
+    /// Call [`QueryClient::set_codec()`] to set a different codec.
+    ///
+    /// Call [`QueryClient::set_options()`] to set non-default options.
     #[track_caller]
     pub fn new() -> Self {
         Self {
             scope_lookup: ScopeLookup::new(),
             options: QueryOptions::default(),
+            _ser: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<Codec: 'static> QueryClient<Codec> {
+    /// Provide the client to leptos context.
+    /// ```no_run
+    /// use leptos_fetch::QueryClient;
+    /// use leptos::prelude::*;
+    ///
+    /// QueryClient::new().provide();
+    ///
+    /// let client: QueryClient = expect_context();
+    /// ```
+    #[track_caller]
+    pub fn provide(self) -> Self {
+        provide_context(self);
+        self
+    }
+
+    /// **Applies to `ssr` only**
+    ///
+    /// It's possible to use non-json codecs for streaming leptos resources from the backend.
+    /// The default is [`codee::string::JsonSerdeCodec`].
+    ///
+    /// The current `codee` major version is `0.3` and will need to be imported in your project to customize the codec.
+    ///
+    /// E.g. to use [`codee::binary::MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html):
+    /// ```toml
+    /// codee = { version = "0.3", features = ["msgpack_serde"] }
+    /// ```
+    ///
+    /// This is a generic type on the [`QueryClient`], so when calling [`leptos::prelude::expect_context`],
+    /// this type must be specified when not using the default.
+    ///
+    /// A useful pattern is to type alias the client with the custom codec for your whole app:
+    ///
+    /// ```no_run
+    /// use codee::binary::MsgpackSerdeCodec;
+    /// use leptos::prelude::*;
+    /// use leptos_fetch::QueryClient;
+    ///
+    /// type MyQueryClient = QueryClient<MsgpackSerdeCodec>;
+    ///
+    /// // Create and provide to context to make accessible everywhere:
+    /// QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
+    ///
+    /// let client: MyQueryClient = expect_context();
+    /// ```
+    #[track_caller]
+    pub fn set_codec<NewCodec>(self) -> QueryClient<NewCodec> {
+        QueryClient {
+            scope_lookup: self.scope_lookup,
+            options: self.options,
+            _ser: std::marker::PhantomData,
         }
     }
 
-    /// Create a new [`QueryClient`] with custom options.
+    /// Set non-default options to apply to all queries.
     ///
-    /// These options will be combined with any options for a specific query type/scope.
+    /// These options will be combined with any options for a specific query type.
     #[track_caller]
-    pub fn new_with_options(options: QueryOptions) -> Self {
-        Self {
-            scope_lookup: ScopeLookup::new(),
-            options,
-        }
-    }
-
-    /// Create a new [`QueryClient`] and provide it via leptos context.
-    ///
-    /// The client can then be accessed with [`QueryClient::expect()`] from any child component.
-    #[track_caller]
-    pub fn provide() {
-        provide_context(Self::new())
-    }
-
-    /// Create a new [`QueryClient`] with custom options and provide it via leptos context.
-    ///
-    /// The client can then be accessed with [`QueryClient::expect()`] from any child component.
-    ///
-    /// These options will be combined with any options for a specific query type/scope.
-    #[track_caller]
-    pub fn provide_with_options(options: QueryOptions) {
-        provide_context(Self::new_with_options(options))
-    }
-
-    /// Extract the [`QueryClient`] out of leptos context.
-    ///
-    /// Shorthand for `expect_context::<QueryClient>()`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the [`QueryClient`] has not been provided via leptos context by a parent component.
-    #[track_caller]
-    pub fn expect() -> Self {
-        expect_context()
+    pub fn set_options(mut self, options: QueryOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Read the base [`QueryOptions`] for this [`QueryClient`].
@@ -123,30 +159,31 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> LocalResource<V>
     where
-        K: Eq + Hash + Clone + 'static,
+        K: Hash + Clone + 'static,
         V: Clone + 'static,
     {
         let client = *self;
+        let client_options = self.options();
         let scope_lookup = self.scope_lookup;
         let cache_key = query_scope.cache_key();
         let query_scope = Arc::new(query_scope);
-        let self_ = *self;
         let query_options = query_scope.options();
         let resource_id = new_resource_id();
 
         // To call .mark_resource_dropped() when the resource is dropped:
-        let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
+        let drop_guard = ResourceDropGuard::<V>::new(self.scope_lookup, resource_id, cache_key);
 
         LocalResource::new({
             move || {
                 let query_scope = query_scope.clone();
                 let key = keyer();
+                let key_hash = KeyHash::new(&key);
                 let drop_guard = drop_guard.clone();
-                drop_guard.set_active_key(key.clone());
+                drop_guard.set_active_key(key_hash);
                 async move {
                     // First try using the cache:
-                    if let Some(cached) = scope_lookup.with_cached_query::<K, V, _>(
-                        &key,
+                    if let Some(cached) = scope_lookup.with_cached_query::<V, _>(
+                        &key_hash,
                         &cache_key,
                         |maybe_cached| {
                             if let Some(cached) = maybe_cached {
@@ -175,7 +212,8 @@ impl QueryClient {
 
                     scope_lookup
                         .cached_or_fetch(
-                            &self_,
+                            client_options,
+                            scope_lookup,
                             &key,
                             cache_key,
                             move |key| async move {
@@ -203,7 +241,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> ArcLocalResource<V>
     where
-        K: Eq + Hash + Clone + 'static,
+        K: Hash + Clone + 'static,
         V: Clone + 'static,
     {
         // TODO on next 0.7 + 0.8 release, switch back to the arc as the base not the signal one:
@@ -224,10 +262,16 @@ impl QueryClient {
         &self,
         query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> Resource<V>
+    ) -> Resource<V, Codec>
     where
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+        K: PartialEq + Hash + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        Codec: Encoder<V> + Decoder<V>,
+        <Codec as Encoder<V>>::Error: Debug,
+        <Codec as Decoder<V>>::Error: Debug,
+        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
+        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, false)
             .into()
@@ -245,10 +289,16 @@ impl QueryClient {
         &self,
         query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> Resource<V>
+    ) -> Resource<V, Codec>
     where
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+        K: PartialEq + Hash + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        Codec: Encoder<V> + Decoder<V>,
+        <Codec as Encoder<V>>::Error: Debug,
+        <Codec as Decoder<V>>::Error: Debug,
+        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
+        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, true)
             .into()
@@ -266,10 +316,16 @@ impl QueryClient {
         &self,
         query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> ArcResource<V>
+    ) -> ArcResource<V, Codec>
     where
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+        K: PartialEq + Hash + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        Codec: Encoder<V> + Decoder<V>,
+        <Codec as Encoder<V>>::Error: Debug,
+        <Codec as Decoder<V>>::Error: Debug,
+        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
+        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, false)
     }
@@ -286,10 +342,16 @@ impl QueryClient {
         &self,
         query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> ArcResource<V>
+    ) -> ArcResource<V, Codec>
     where
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+        K: PartialEq + Hash + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        Codec: Encoder<V> + Decoder<V>,
+        <Codec as Encoder<V>>::Error: Debug,
+        <Codec as Decoder<V>>::Error: Debug,
+        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
+        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, true)
     }
@@ -300,34 +362,41 @@ impl QueryClient {
         query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
         blocking: bool,
-    ) -> ArcResource<V>
+    ) -> ArcResource<V, Codec>
     where
-        K: Eq + Hash + Clone + Send + Sync + 'static,
-        V: Clone + Serialize + DeserializeOwned + Send + Sync + 'static,
+        K: PartialEq + Hash + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        Codec: Encoder<V> + Decoder<V>,
+        <Codec as Encoder<V>>::Error: Debug,
+        <Codec as Decoder<V>>::Error: Debug,
+        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
+        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
     {
         let client = *self;
+        let client_options = self.options();
         let cache_key = query_scope.cache_key();
         let query_scope = Arc::new(query_scope);
         let scope_lookup = self.scope_lookup;
-        let self_ = *self;
         let query_options = query_scope.options();
 
-        let active_key_memo = ArcMemo::new(move |_| keyer());
         let next_buster = ArcRwSignal::new(new_buster_id());
         let resource_id = new_resource_id();
 
         // To call .mark_resource_dropped() when the resource is dropped:
-        let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
+        let drop_guard = ResourceDropGuard::<V>::new(self.scope_lookup, resource_id, cache_key);
 
+        let keyer = Arc::new(keyer);
         let resource = ArcResource::new_with_options(
             {
                 let next_buster = next_buster.clone();
-                let active_key_memo = active_key_memo.clone();
                 let drop_guard = drop_guard.clone();
+                let keyer = keyer.clone();
                 move || {
-                    let key = active_key_memo.get();
-                    drop_guard.set_active_key(key.clone());
-                    scope_lookup.with_cached_query::<K, V, _>(&key, &cache_key, |maybe_cached| {
+                    let key = keyer();
+                    let key_hash = KeyHash::new(&key);
+                    drop_guard.set_active_key(key_hash);
+                    scope_lookup.with_cached_query::<V, _>(&key_hash, &cache_key, |maybe_cached| {
                         if let Some(cached) = maybe_cached {
                             // Buster must be returned for it to be tracked.
                             (key.clone(), cached.buster.get())
@@ -340,12 +409,13 @@ impl QueryClient {
             },
             {
                 move |(key, _)| {
+                    let key_hash = KeyHash::new(&key);
                     let query_scope = query_scope.clone();
                     let next_buster = next_buster.clone();
                     let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
                     async move {
-                        if let Some(cached) = scope_lookup.with_cached_query::<K, V, _>(
-                            &key,
+                        if let Some(cached) = scope_lookup.with_cached_query::<V, _>(
+                            &key_hash,
                             &cache_key,
                             |maybe_cached| {
                                 maybe_cached.map(|cached| {
@@ -367,7 +437,8 @@ impl QueryClient {
                         } else {
                             scope_lookup
                                 .cached_or_fetch(
-                                    &self_,
+                                    client_options,
+                                    scope_lookup,
                                     &key,
                                     cache_key,
                                     move |key| async move {
@@ -390,32 +461,34 @@ impl QueryClient {
         // On the client, want to repopulate the frontend cache, so should write resources to the cache here if they don't exist.
         // TODO it would be better if in here we could check if the resource was started on the backend/streamed, saves doing most of this if already a frontend resource.
         let effect = {
-            let active_key_memo = active_key_memo.clone();
             let resource = resource.clone();
-            let self_ = *self;
             // Converting to Arc because the tests like the client get dropped even though this persists:
             move |complete: Option<Option<()>>| {
                 if let Some(Some(())) = complete {
                     return Some(());
                 }
                 if let Some(val) = resource.read().as_ref() {
-                    scope_lookup.with_cached_scope_mut::<K, V, _>(cache_key, true, |maybe_scope| {
+                    scope_lookup.with_cached_scope_mut::<V, _>(cache_key, true, |maybe_scope| {
                         let scope = maybe_scope.expect("provided a default");
-                        let key = active_key_memo.read();
-                        if !scope.contains_key(&key) {
-                            let key = KeyHash::new(&*key);
-                            let query = Query::new::<K>(
-                                self_,
+                        let key = keyer();
+                        let key_hash = KeyHash::new(&key);
+                        if !scope.contains_key(&key_hash) {
+                            let query = Query::new(
+                                client_options,
+                                scope_lookup,
                                 cache_key,
-                                &key,
+                                &key_hash,
                                 MaybeLocal::new(val.clone()),
                                 ArcRwSignal::new(new_buster_id()),
                                 query_options,
                                 None,
                             );
-                            scope.insert(key, query);
+                            scope.insert(key_hash, query);
                         }
-                        scope.get(&key).unwrap().mark_resource_active(resource_id)
+                        scope
+                            .get(&key_hash)
+                            .unwrap()
+                            .mark_resource_active(resource_id)
                     });
                     Some(())
                 } else {
@@ -425,7 +498,11 @@ impl QueryClient {
         };
         // Won't run in tests if not isomorphic, but in prod Effect is wanted to not run on server:
         if cfg!(test) {
-            Effect::new_isomorphic(effect);
+            // Wants Send + Sync on the Codec despite using SendWrapper in the PhantomData.
+            // Can put a SendWrapper around it as this is test only and they're single threaded:
+            let effect = SendWrapper::new(effect);
+            #[allow(clippy::redundant_closure)]
+            Effect::new_isomorphic(move |v| effect(v));
         } else {
             Effect::new(effect);
         }
@@ -445,8 +522,8 @@ impl QueryClient {
         query_scope: impl QueryScopeTrait<K, V>,
         key: impl Borrow<K>,
     ) where
-        K: Clone + Eq + Hash + 'static,
-        V: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+        K: Clone + Hash + 'static,
+        V: Send + Sync + 'static,
     {
         let query_options = query_scope.options();
         self.prefetch_inner(
@@ -470,7 +547,7 @@ impl QueryClient {
         query_scope: impl QueryScopeLocalTrait<K, V>,
         key: impl Borrow<K>,
     ) where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: 'static,
     {
         let query_options = query_scope.options();
@@ -490,13 +567,14 @@ impl QueryClient {
         key: &K,
         query_options: Option<QueryOptions>,
     ) where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: 'static,
         Fut: Future<Output = MaybeLocal<V>>,
     {
+        let key_hash = KeyHash::new(key);
         let (needs_prefetch, custom_next_buster, loading_first_time) = self
             .scope_lookup
-            .with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
+            .with_cached_query::<V, _>(&key_hash, &cache_key, |maybe_cached| {
                 if let Some(cached) = maybe_cached {
                     (cached.stale(), Some(cached.buster.clone()), false)
                 } else {
@@ -506,7 +584,8 @@ impl QueryClient {
         if needs_prefetch {
             self.scope_lookup
                 .cached_or_fetch_inner::<K, V, _, _>(
-                    self,
+                    self.options(),
+                    self.scope_lookup,
                     key,
                     cache_key,
                     fetcher,
@@ -536,7 +615,7 @@ impl QueryClient {
         key: impl Borrow<K>,
     ) -> V
     where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: Clone + Send + Sync + 'static,
     {
         let query_options = query_scope.options();
@@ -564,7 +643,7 @@ impl QueryClient {
         key: impl Borrow<K>,
     ) -> V
     where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: Clone + 'static,
     {
         let query_options = query_scope.options();
@@ -585,13 +664,14 @@ impl QueryClient {
         query_options: Option<QueryOptions>,
     ) -> V
     where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: Clone + 'static,
         Fut: Future<Output = MaybeLocal<V>>,
     {
+        let key_hash = KeyHash::new(key);
         let (maybe_cached, loading_first_time) = self
             .scope_lookup
-            .with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
+            .with_cached_query::<V, _>(&key_hash, &cache_key, |maybe_cached| {
                 maybe_cached.map(|cached| {
                     if cached.stale() {
                         (None, false)
@@ -606,7 +686,8 @@ impl QueryClient {
         } else {
             self.scope_lookup
                 .cached_or_fetch_inner::<K, V, _, _>(
-                    self,
+                    self.options(),
+                    self.scope_lookup,
                     key,
                     cache_key,
                     fetcher,
@@ -632,7 +713,7 @@ impl QueryClient {
         key: impl Borrow<K>,
         new_value: V,
     ) where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: Send + Sync + 'static,
     {
         self.set_inner(
@@ -654,7 +735,7 @@ impl QueryClient {
         key: impl Borrow<K>,
         new_value: V,
     ) where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: 'static,
     {
         self.set_inner::<K, V>(
@@ -673,35 +754,36 @@ impl QueryClient {
         new_value: MaybeLocal<V>,
         query_options: Option<QueryOptions>,
     ) where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: 'static,
     {
+        let key_hash = KeyHash::new(key);
         self.scope_lookup
-            .with_cached_scope_mut::<K, V, _>(cache_key, true, |maybe_scope| {
+            .with_cached_scope_mut::<V, _>(cache_key, true, |maybe_scope| {
                 let scope = maybe_scope.expect("provided a default");
 
                 // If we're updating an existing, make sure to update
                 let maybe_cached = if new_value.is_local() {
-                    scope.get_mut_local_only(key)
+                    scope.get_mut_local_only(&key_hash)
                 } else {
-                    scope.get_mut_threadsafe_only(key)
+                    scope.get_mut_threadsafe_only(&key_hash)
                 };
                 if let Some(cached) = maybe_cached {
                     cached.set_value(new_value);
                     // To update all existing resources:
                     cached.buster.set(new_buster_id());
                 } else {
-                    let key = KeyHash::new(key);
-                    let query = Query::new::<K>(
-                        *self,
+                    let query = Query::new(
+                        self.options(),
+                        self.scope_lookup,
                         cache_key,
-                        &key,
+                        &key_hash,
                         new_value,
                         ArcRwSignal::new(new_buster_id()),
                         query_options,
                         None,
                     );
-                    scope.insert(key, query);
+                    scope.insert(key_hash, query);
                 }
             });
     }
@@ -721,27 +803,29 @@ impl QueryClient {
         modifier: impl FnOnce(Option<&mut V>) -> T,
     ) -> T
     where
-        K: Clone + Eq + Hash + 'static,
+        K: Clone + Hash + 'static,
         V: 'static,
     {
         let key = key.borrow();
+        let key_hash = KeyHash::new(key);
 
         let mut modifier_holder = Some(modifier);
 
-        let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<V, _>(
             query_scope.cache_key(),
             false,
             |maybe_scope| {
                 if let Some(scope) = maybe_scope {
-                    if let Some((key, cached)) = scope.remove_entry(key) {
+                    if let Some((key, cached)) = scope.remove_entry(&key_hash) {
                         let mut value = cached.value_maybe_stale.into_value_maybe_local();
                         let return_value = modifier_holder
                             .take()
                             .expect("Should never be used more than once.")(
                             Some(value.value_mut()),
                         );
-                        let query = Query::new::<K>(
-                            *self,
+                        let query = Query::new(
+                            self.options(),
+                            self.scope_lookup,
                             query_scope.cache_key(),
                             &key,
                             value,
@@ -776,11 +860,11 @@ impl QueryClient {
         key: impl Borrow<K>,
     ) -> Option<V>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: Clone + 'static,
     {
-        self.scope_lookup.with_cached_query::<K, V, _>(
-            key.borrow(),
+        self.scope_lookup.with_cached_query::<V, _>(
+            &KeyHash::new(key.borrow()),
             &query_scope.cache_key(),
             |maybe_cached| maybe_cached.map(|cached| cached.value_maybe_stale.value().clone()),
         )
@@ -796,11 +880,11 @@ impl QueryClient {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
-        self.scope_lookup.with_cached_query::<K, V, _>(
-            key.borrow(),
+        self.scope_lookup.with_cached_query::<V, _>(
+            &KeyHash::new(key.borrow()),
             &query_scope.cache_key(),
             |maybe_cached| maybe_cached.is_some(),
         )
@@ -823,7 +907,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + Send + Sync + 'static,
+        K: Hash + Send + Sync + 'static,
         V: 'static,
     {
         self.subscribe_is_loading_arc(query_scope, keyer).into()
@@ -846,7 +930,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         self.subscribe_is_loading_arc_local(query_scope, keyer)
@@ -870,7 +954,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         if cfg!(feature = "ssr") {
@@ -903,7 +987,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
-        K: Eq + Hash + Send + Sync + 'static,
+        K: Hash + Send + Sync + 'static,
         V: 'static,
     {
         self.scope_lookup
@@ -931,7 +1015,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + Send + Sync + 'static,
+        K: Hash + Send + Sync + 'static,
         V: 'static,
     {
         self.subscribe_is_fetching_arc(query_scope, keyer).into()
@@ -954,7 +1038,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> Signal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         self.subscribe_is_fetching_arc_local(query_scope, keyer)
@@ -978,7 +1062,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         if cfg!(feature = "ssr") {
@@ -1011,7 +1095,7 @@ impl QueryClient {
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
-        K: Eq + Hash + Send + Sync + 'static,
+        K: Hash + Send + Sync + 'static,
         V: 'static,
     {
         let mut guard = self.scope_lookup.subscriptions_mut();
@@ -1031,7 +1115,7 @@ impl QueryClient {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         let cleared = self.invalidate_queries(query_scope, std::iter::once(key));
@@ -1048,7 +1132,7 @@ impl QueryClient {
         keys: impl IntoIterator<Item = KRef>,
     ) -> Vec<KRef>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
         KRef: Borrow<K>,
     {
@@ -1062,16 +1146,16 @@ impl QueryClient {
         keys: impl IntoIterator<Item = KRef>,
     ) -> Vec<KRef>
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
         KRef: Borrow<K>,
     {
         self.scope_lookup
-            .with_cached_scope_mut::<K, V, _>(cache_key, false, |maybe_scope| {
+            .with_cached_scope_mut::<V, _>(cache_key, false, |maybe_scope| {
                 let mut invalidated = vec![];
                 if let Some(scope) = maybe_scope {
                     for key in keys.into_iter() {
-                        if let Some(cached) = scope.get_mut(key.borrow()) {
+                        if let Some(cached) = scope.get_mut(&KeyHash::new(key.borrow())) {
                             cached.invalidate();
                             invalidated.push(key);
                         }
@@ -1087,7 +1171,7 @@ impl QueryClient {
     #[track_caller]
     pub fn invalidate_query_type<K, V>(&self, query_scope: impl QueryScopeLocalTrait<K, V>)
     where
-        K: Eq + Hash + 'static,
+        K: Hash + 'static,
         V: 'static,
     {
         let mut guard = self.scope_lookup.scopes_mut();

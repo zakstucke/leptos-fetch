@@ -122,14 +122,14 @@ impl Subscriptions {
     pub fn notify_fetching_start(
         &mut self,
         cache_key: TypeId,
-        key: KeyHash,
+        key_hash: KeyHash,
         loading_first_time: bool,
     ) {
         self.actively_fetching
-            .insert((cache_key, key), loading_first_time);
+            .insert((cache_key, key_hash), loading_first_time);
         if let Some(subs) = self.subs.lock().get_mut(&cache_key) {
             for sub in subs.values() {
-                if sub.key_hash.get_untracked() == key {
+                if sub.key_hash.get_untracked() == key_hash {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:
@@ -154,13 +154,13 @@ impl Subscriptions {
     pub fn notify_fetching_finish(
         &mut self,
         cache_key: TypeId,
-        key: KeyHash,
+        key_hash: KeyHash,
         loading_first_time: bool,
     ) {
-        self.actively_fetching.remove(&(cache_key, key));
+        self.actively_fetching.remove(&(cache_key, key_hash));
         if let Some(subs) = self.subs.lock().get_mut(&cache_key) {
             for sub in subs.values() {
-                if sub.key_hash.get_untracked() == key {
+                if sub.key_hash.get_untracked() == key_hash {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
                             // Don't want to trigger if not changing:

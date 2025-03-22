@@ -5,8 +5,12 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### BREAKING
+- Changes required for the custom codec feature for correct type inferrence. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
+    - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::set_options(self, options) -> Self` is available as a builder method, e.g. `QueryClient::new().set_options(..)`. 
+    - `QueryClient::provide()` replaced with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
+    - `QueryClient::expect()` removed, `expect_context::<QueryClient>()` directly from leptos should be used instead. 
 - Subscriptions: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
-    - The `key: &K where K: 'static` argument has been replaced with `keyer: impl Fn() -> K + Send + Sync + 'static where K: Send + Sync + static`. This makes subscribers reactive to a changing key value and matches resources.
+    - `_subscribe_()` methods' `key: &K where K: 'static` argument replaced with `keyer: impl Fn() -> K + Send + Sync + 'static where K: Send + Sync + static`. This makes subscribers reactive to a changing key value to mirror resources.
     - Because `Send + Sync` are now required, `subscribe_is_fetching_local()`, `subscribe_is_fetching_arc_local()`, `subscribe_is_loading_local()`, `subscribe_is_loading_arc_local()` have been added that do not have these bounds, and are always `true` on the server in `ssr`.
 - Renaming, standardized `arc|local` to come at the end of method names to make autocomplete easier. Resources are the exception, they inherit their naming from leptos itself: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
     - `arc_subscribe_is_fetching` -> `subscribe_is_fetching_arc`
@@ -16,8 +20,10 @@ All notable changes to this project are documented in this file.
     - `set_local_query` -> `set_query_local`
 
 ### Added
+- For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. Customize with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/0.3.1/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
 
 ### Fixed
+- Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
 
 ### Tests
 
