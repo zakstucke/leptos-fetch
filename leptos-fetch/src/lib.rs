@@ -289,7 +289,7 @@ mod test {
                 if deadlocks.is_empty() {
                     continue;
                 }
-    
+
                 println!("{} deadlocks detected", deadlocks.len());
                 for (i, threads) in deadlocks.iter().enumerate() {
                     println!("Deadlock #{}", i);
@@ -926,7 +926,7 @@ mod test {
                             assert_eq!(is_loading.get_untracked(), true);
                             tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             assert_eq!(is_fetching.get_untracked(), false);
-                            assert_eq!(is_loading.get_untracked(), false);                            
+                            assert_eq!(is_loading.get_untracked(), false);
 
                             // Stale should still mean only is_fetching is true:
                             client.invalidate_query(fetcher.clone(), &3);
@@ -935,7 +935,7 @@ mod test {
                             assert_eq!(is_loading.get_untracked(), false);
                             tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             assert_eq!(is_fetching.get_untracked(), false);
-                            assert_eq!(is_loading.get_untracked(), false);                            
+                            assert_eq!(is_loading.get_untracked(), false);
 
                             // If the resource diverges, subscriber shouldn't notice:
                             resource_key_signal.set(4);

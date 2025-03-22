@@ -2,8 +2,8 @@ use std::{any::TypeId, borrow::Borrow, future::Future, hash::Hash, sync::Arc};
 
 use leptos::{
     prelude::{
-        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get,
-        Read, Set, Signal, Track,
+        expect_context, provide_context, ArcMemo, ArcRwSignal, ArcSignal, Effect, Get, Read, Set,
+        Signal, Track,
     },
     server::{ArcLocalResource, ArcResource, LocalResource, Resource},
 };
@@ -849,7 +849,8 @@ impl QueryClient {
         K: Eq + Hash + 'static,
         V: 'static,
     {
-        self.subscribe_is_loading_arc_local(query_scope, keyer).into()
+        self.subscribe_is_loading_arc_local(query_scope, keyer)
+            .into()
     }
 
     /// Subscribe to the `is_loading` status of a query with a non-threadsafe key.
@@ -883,7 +884,7 @@ impl QueryClient {
                     ArcSignal::derive(move || KeyHash::new(&keyer())),
                 )
         }
-    }    
+    }
 
     /// Subscribe to the `is_loading` status of a query.
     /// The keyer function is reactive to changes in `K`.
@@ -956,8 +957,9 @@ impl QueryClient {
         K: Eq + Hash + 'static,
         V: 'static,
     {
-        self.subscribe_is_fetching_arc_local(query_scope, keyer).into()
-    }    
+        self.subscribe_is_fetching_arc_local(query_scope, keyer)
+            .into()
+    }
 
     /// Subscribe to the `is_fetching` status of a query with a non-threadsafe key.
     /// The keyer function is reactive to changes in `K`.
@@ -990,7 +992,7 @@ impl QueryClient {
                     ArcSignal::derive(move || KeyHash::new(&keyer())),
                 )
         }
-    }        
+    }
 
     /// Subscribe to the `is_fetching` status of a query.
     /// The keyer function is reactive to changes in `K`.
