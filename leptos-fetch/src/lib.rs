@@ -302,6 +302,54 @@ mod test {
         });
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn test_codecs(
+        #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
+        #[values(false, true)] arc: bool,
+        #[values(false, true)] server_ctx: bool,
+    ) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (fetcher, _fetch_calls) = default_fetcher();
+
+                let (client_default, _guard, _owner) = prep_vari!(server_ctx);
+                let client_custom =
+                    QueryClient::new().set_codec::<codee::binary::FromToBytesCodec>();
+                use_context::<QueryClient>();
+                use_context::<QueryClient<codee::binary::FromToBytesCodec>>();
+
+                macro_rules! check {
+                    ($get_resource:expr) => {{
+                        let resource = $get_resource();
+                        // On the server cannot actually run local resources:
+                        if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
+                            assert_eq!(resource.await, 4);
+                        }
+                    }};
+                }
+
+                vari_new_resource_with_cb!(
+                    check,
+                    client_default,
+                    fetcher.clone(),
+                    move || 2,
+                    resource_type,
+                    arc
+                );
+                vari_new_resource_with_cb!(
+                    check,
+                    client_custom,
+                    fetcher.clone(),
+                    move || 2,
+                    resource_type,
+                    arc
+                );
+            })
+            .await;
+    }
+
     /// Local and non-local values should externally be seen as the same cache.
     /// On the same thread they should both use the cached value.
     /// On a different thread, locally cached values shouldn't panic, should just be treated like they don't exist.
@@ -721,7 +769,6 @@ mod test {
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
-        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)] _ree: usize,
     ) {
         identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()

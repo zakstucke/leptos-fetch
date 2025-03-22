@@ -29,14 +29,15 @@ all-features = true
 [dependencies]
 chrono.workspace = true
 futures.workspace = true
+codee.workspace = true
 leptos.workspace = true
 paste.workspace = true
 parking_lot.workspace = true
 send_wrapper.workspace = true
-serde.workspace = true
 
 [dev-dependencies]
 any_spawner = { workspace = true, features = ["tokio"] }
+codee = { workspace = true, features = ["msgpack_serde"] }
 hydration_context.workspace = true
 rstest = "0.25"
 tokio = { version = "1", features = ["full"] }

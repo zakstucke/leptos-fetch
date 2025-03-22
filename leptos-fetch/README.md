@@ -19,6 +19,7 @@ LF provides:
 - Memory management with cache lifetimes
 - Optimistic updates
 - Declarative query interaction as a supplement to leptos resources
+- In `ssr`, custom stream encoding at a global level
 
 ### How's this different from a Leptos Resource?
 
@@ -37,6 +38,7 @@ LF also allows you to interact declaratively with queries outside resources, sub
 - [Declarative Query Interactions](#declarative-query-management)
 - [Subscriptions](#subscriptions)
 - [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
 
 ## Installation
 
@@ -70,7 +72,7 @@ ssr = [
 
 ## Quick Start
 
-In the root of your App, provide a query client with [`QueryClient::provide`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide) or [`QueryClient::provide_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide_with_options) if you want to override the default options.
+In the root of your App, create a query client with [`QueryClient::new`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.new) then call [`QueryClient::provide`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide) to store in leptos context.
 
 ```rust
 use leptos::prelude::*;
@@ -79,9 +81,10 @@ use leptos_fetch::QueryClient;
 #[component]
 pub fn App() -> impl IntoView {
     // Provides the Query Client for the entire app via leptos context.
-    QueryClient::provide();
+    QueryClient::new().provide();
     
-    // QueryClient::provide_with_options(QueryOptions::new()..) can customize default behaviour.
+    // QueryClient::set_options(QueryOptions::new()..) can customize default behaviour.
+    // QueryClient::set_codec::<Codec>() can be used to change the codec for streaming in ssr.
 
     // Rest of App...
 }
@@ -105,11 +108,10 @@ use leptos_fetch::QueryClient;
 #[component]
 fn TrackView(id: i32) -> impl IntoView {
     // Usually at the root of the App:
-    QueryClient::provide();
+    QueryClient::new().provide();
 
     // Extract the root client from leptos context,
-    // this is identical to expect_context::<QueryClient>()
-    let client = QueryClient::expect();
+    let client: QueryClient = expect_context();
     
     // Native leptos resources are returned, 
     // there are also variants for local, blocking, arc resources. 
@@ -151,7 +153,7 @@ The [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.Que
 **NOTE: `stale_time` can never be greater than `gc_time`.**
 > If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time`.
 
-[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by creating it with [`QueryClient::new_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.new_with_options) or [`QueryClient::provide_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide_with_options).
+[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by calling it with [`QueryClient::set_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_options).
 
 Options can also be applied to individual query types by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
 
@@ -162,7 +164,9 @@ Query type specific [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_
 
 ```rust
 use std::time::Duration;
+
 use leptos_fetch::{QueryClient, QueryScope, QueryOptions};
+use leptos::prelude::*;
 
 // A QueryScope/QueryScopeLocal can be used just like the function directly in QueryClient methods.
 fn track_query() -> QueryScope<i32, String> {
@@ -181,7 +185,7 @@ async fn get_track(id: i32) -> String {
 }
 
 fn foo() {
-    let client = QueryClient::expect();
+    let client: QueryClient = expect_context();
     let resource = client.resource(track_query(), || 2);
 }
 ```
@@ -217,5 +221,37 @@ To prevent needing all types to be `Sync` + `Send`, `_local()` variants of many 
 This is achieved by internally utilising a threadsafe cache, alongside a local cache per thread, abstracting this away to expose a singular combined cache. 
 
 The public API will only provide access to cache values that are either threadsafe, or created on the current thread, and this distinction should be completely invisible to a user.
+
+## Custom Streaming Codecs
+
+**Applies to `ssr` only**
+
+It's possible to use non-json codecs for streaming leptos resources from the backend.
+The default is [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html).
+
+The current `codee` major version is `0.3` and will need to be imported in your project to customize the codec.
+
+E.g. to use [`codee::binary::MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html): 
+```toml
+codee = { version = "0.3", features = ["msgpack_serde"] }
+```
+
+[`MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html) will become a generic type on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), so when calling [`expect_context`](https://docs.rs/leptos/latest/leptos/prelude/fn.expect_context.html),
+this type must be specified when not using the default.
+
+A useful pattern is to type alias the client with the custom codec for your whole app:
+
+```rust,no_run
+use codee::binary::MsgpackSerdeCodec;
+use leptos::prelude::*;
+use leptos_fetch::QueryClient;
+
+type MyQueryClient = QueryClient<MsgpackSerdeCodec>;
+
+// Create and provide to context to make accessible everywhere:
+QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
+
+let client: MyQueryClient = expect_context();
+```
 
 <!-- cargo-rdme end -->
