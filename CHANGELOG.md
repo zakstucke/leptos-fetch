@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### BREAKING
+- Subscriptions: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
+    - The `key: &K where K: 'static` argument has been replaced with `keyer: impl Fn() -> K + Send + Sync + 'static where K: Send + Sync + static`. This makes subscribers reactive to a changing key value and matches resources.
+    - Because `Send + Sync` are now required, `subscribe_is_fetching_local()`, `subscribe_is_fetching_arc_local()`, `subscribe_is_loading_local()`, `subscribe_is_loading_arc_local()` have been added that do not have these bounds, and are always `true` on the server in `ssr`.
+- Renaming, standardized `arc|local` to come at the end of method names to make autocomplete easier. Resources are the exception, they inherit their naming from leptos itself: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
+    - `arc_subscribe_is_fetching` -> `subscribe_is_fetching_arc`
+    - `arc_subscribe_is_loading` -> `subscribe_is_loading_arc`
+    - `prefetch_local_query` -> `prefetch_query_local`
+    - `fetch_local_query` -> `fetch_query_local`
+    - `set_local_query` -> `set_query_local`
+
 ### Added
 
 ### Fixed

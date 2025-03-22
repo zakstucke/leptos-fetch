@@ -192,7 +192,7 @@ Resources are just one way to load and interact with queries. The [`QueryClient`
 
 ### Query Invalidation
 
-Sometimes you can't wait for a query to become stale before you refetch it. [`QueryClient::invalidated_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) and friends allow you to intelligently mark queries as stale and potentially refetch them too.
+Sometimes you can't wait for a query to become stale before you refetch it. [`QueryClient::invalidate_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) and friends allow you to intelligently mark queries as stale and potentially refetch them too.
 
 When a query is invalidated, the following happens:
 

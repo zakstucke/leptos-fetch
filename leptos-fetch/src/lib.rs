@@ -30,7 +30,7 @@ mod test {
         ptr::NonNull,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc,
+            Arc, Once,
         },
     };
 
@@ -280,19 +280,42 @@ mod test {
         )
     }
 
+    fn identify_parking_lot_deadlocks() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let deadlocks = parking_lot::deadlock::check_deadlock();
+                if deadlocks.is_empty() {
+                    continue;
+                }
+
+                println!("{} deadlocks detected", deadlocks.len());
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    println!("Deadlock #{}", i);
+                    for t in threads {
+                        println!("Thread Id {:#?}", t.thread_id());
+                        println!("{:#?}", t.backtrace());
+                    }
+                }
+            });
+        });
+    }
+
     /// Local and non-local values should externally be seen as the same cache.
     /// On the same thread they should both use the cached value.
     /// On a different thread, locally cached values shouldn't panic, should just be treated like they don't exist.
     #[rstest]
     #[tokio::test]
     async fn test_shared_cache() {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (fetcher, _fetch_calls) = default_fetcher();
                 let (client, _guard, _owner) = prep_vari!(false);
 
                 // Locally set value to 1:
-                client.set_local_query(&fetcher, 2, 1);
+                client.set_query_local(&fetcher, 2, 1);
                 assert_eq!(client.get_cached_query(&fetcher, 2), Some(1));
 
                 // Try and get from a different thread, shouldn't try and touch the local cache, should say uncached:
@@ -308,7 +331,7 @@ mod test {
 
                                 // Set nonlocally to 3, set nonlocally to 2:
                                 client.set_query(&fetcher, 2, 3);
-                                client.set_local_query(&fetcher, 2, 2);
+                                client.set_query_local(&fetcher, 2, 2);
                             });
                     }
                 })
@@ -339,14 +362,15 @@ mod test {
     }
 
     /// prefetch_query
-    /// prefetch_local_query
+    /// prefetch_query_local
     /// fetch_query
-    /// fetch_local_query
+    /// fetch_query_local
     /// update_query
     /// query_exists
     #[rstest]
     #[tokio::test]
     async fn test_declaratives() {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (fetcher, _fetch_calls) = default_fetcher();
@@ -354,7 +378,7 @@ mod test {
 
                 let key = 1;
                 assert!(!client.query_exists(&fetcher, key));
-                client.set_local_query(&fetcher, key, 1);
+                client.set_query_local(&fetcher, key, 1);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(1));
                 assert!(client.update_query(&fetcher, key, |value| value
                     .map(|v| {
@@ -376,7 +400,7 @@ mod test {
 
                 let key = 2;
                 assert!(!client.query_exists(&fetcher, key));
-                client.prefetch_local_query(&fetcher, key).await;
+                client.prefetch_query_local(&fetcher, key).await;
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(4));
                 client.clear();
                 assert_eq!(client.size(), 0);
@@ -385,7 +409,7 @@ mod test {
 
                 let key = 3;
                 assert!(!client.query_exists(&fetcher, key));
-                assert_eq!(client.fetch_local_query(&fetcher, key).await, 6);
+                assert_eq!(client.fetch_query_local(&fetcher, key).await, 6);
                 assert!(client.query_exists(&fetcher, key));
                 client.clear();
                 assert_eq!(client.size(), 0);
@@ -401,11 +425,12 @@ mod test {
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
     ) {
-        const REFETCH_TIME_MS: u64 = 100;
-        const FETCH_TIME_MS: u64 = 10;
-
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
+                const REFETCH_TIME_MS: u64 = 100;
+                const FETCH_TIME_MS: u64 = 10;
+
                 let fetch_calls = Arc::new(AtomicUsize::new(0));
                 let fetcher = {
                     let fetch_calls = fetch_calls.clone();
@@ -508,10 +533,11 @@ mod test {
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
     ) {
-        const GC_TIME_MS: u64 = 30;
-
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
-            .run_until(async move {
+        .run_until(async move {
+                const GC_TIME_MS: u64 = 30;
+
                 let fetch_calls = Arc::new(AtomicUsize::new(0));
                 let fetcher = {
                     let fetch_calls = fetch_calls.clone();
@@ -614,6 +640,7 @@ mod test {
     #[rstest]
     #[tokio::test]
     async fn test_unsync(#[values(false, true)] arc: bool) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 #[derive(Debug)]
@@ -694,7 +721,9 @@ mod test {
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
+        #[values(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)] _ree: usize,
     ) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (fetcher, fetch_calls) = default_fetcher();
@@ -705,17 +734,23 @@ mod test {
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!(client.subscriber_count(), 0);
-                            let is_fetching = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
-                            let is_fetching_copy = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
+                            let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
+                            let is_fetching_copy = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_fetching_copy.get_untracked(), false);
                             // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 1);
-                            let is_fetching_other = client.arc_subscribe_is_fetching(fetcher.clone(), &3);
+                            let is_fetching_other = client.subscribe_is_fetching_arc(fetcher.clone(), || 3);
+                            assert_eq!(is_fetching_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 2);
-                            let is_loading = client.arc_subscribe_is_loading(fetcher.clone(), &2);
-                            let is_loading_copy = client.arc_subscribe_is_loading(fetcher.clone(), &2);
+                            let is_loading = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
+                            let is_loading_copy = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
+                            assert_eq!(is_loading.get_untracked(), false);
+                            assert_eq!(is_loading_copy.get_untracked(), false);
                             // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 3);
-                            let is_loading_other = client.arc_subscribe_is_loading(fetcher.clone(), &3);
+                            let is_loading_other = client.subscribe_is_loading_arc(fetcher.clone(), || 3);
+                            assert_eq!(is_loading_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 4);
 
                             macro_rules! check_all {
@@ -825,11 +860,11 @@ mod test {
                                 },
                                 async {
                                     tick!();
-                                    let is_fetching = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
-                                    let is_loading = client.arc_subscribe_is_loading(fetcher.clone(), &2);
-                                    assert_eq!(client.subscriber_count(), 2);
+                                    let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
+                                    let is_loading = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
                                     assert_eq!(is_fetching.get_untracked(), true);
                                     assert_eq!(is_loading.get_untracked(), true);
+                                    assert_eq!(client.subscriber_count(), 2);
                                     tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                                     assert_eq!(is_fetching.get_untracked(), false);
                                     assert_eq!(is_loading.get_untracked(), false);
@@ -846,17 +881,67 @@ mod test {
                                 },
                                 async {
                                     tick!();
-                                    let is_fetching = client.arc_subscribe_is_fetching(fetcher.clone(), &2);
-                                    let is_loading = client.arc_subscribe_is_loading(fetcher.clone(), &2);
-                                    assert_eq!(client.subscriber_count(), 2);
+                                    let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
+                                    let is_loading = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
                                     assert_eq!(is_fetching.get_untracked(), true);
                                     assert_eq!(is_loading.get_untracked(), false);
+                                    assert_eq!(client.subscriber_count(), 2);
                                     tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                                     assert_eq!(is_fetching.get_untracked(), false);
                                     assert_eq!(is_loading.get_untracked(), false);
                                 }
                             );
                             assert_eq!(client.subscriber_count(), 0);
+                            client.clear();
+
+                            // Now confirm the subscribers keyer is reactive correctly, and subscriptions don't accidentally say true for the wrong key:
+                            let sub_key_signal = RwSignal::new(2);
+                            let resource_key_signal = RwSignal::new(2);
+                            let is_fetching = client.subscribe_is_fetching(fetcher.clone(), move || sub_key_signal.get());
+                            let is_loading = client.subscribe_is_loading(fetcher.clone(), move || sub_key_signal.get());
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
+
+                            let _resource = client.resource(fetcher.clone(), move || resource_key_signal.get());
+
+                            // The creation of the resource should've triggered the initial fetch:
+                            assert_eq!(is_fetching.get_untracked(), true);
+                            assert_eq!(is_loading.get_untracked(), true);
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
+
+                            // Sanity check confirming it won't refetch if the key hasn't actually changed:
+                            sub_key_signal.set(2);
+                            resource_key_signal.set(2);
+                            tick!();
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
+
+                            // New value should cause a fresh query, subscriber should match:
+                            resource_key_signal.set(3);
+                            sub_key_signal.set(3);
+                            tick!();
+                            assert_eq!(is_fetching.get_untracked(), true);
+                            assert_eq!(is_loading.get_untracked(), true);
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
+
+                            // Stale should still mean only is_fetching is true:
+                            client.invalidate_query(fetcher.clone(), &3);
+                            tick!();
+                            assert_eq!(is_fetching.get_untracked(), true);
+                            assert_eq!(is_loading.get_untracked(), false);
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
+
+                            // If the resource diverges, subscriber shouldn't notice:
+                            resource_key_signal.set(4);
+                            tick!();
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(is_loading.get_untracked(), false);
                         }
                     }};
                 }
@@ -887,6 +972,7 @@ mod test {
         )]
         invalidation_type: InvalidationType,
     ) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (fetcher, fetch_calls) = default_fetcher();
@@ -970,6 +1056,7 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (fetcher, fetch_calls) = default_fetcher();
@@ -1041,6 +1128,7 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 // On the server cannot actually run local resources:
@@ -1110,6 +1198,7 @@ mod test {
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
     ) {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 // On the server cannot actually run local resources:
@@ -1145,6 +1234,7 @@ mod test {
     #[cfg(feature = "ssr")]
     #[tokio::test]
     async fn test_resource_cross_stream_caching() {
+        identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
                 for maybe_sleep_ms in &[None, Some(10), Some(30)] {
