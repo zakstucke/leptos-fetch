@@ -1,15 +1,16 @@
-use std::{any::TypeId, collections::HashSet, fmt::Debug, hash::Hash, sync::Arc, time::Duration};
+use std::{any::TypeId, collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
 use leptos::prelude::{ArcRwSignal, Set};
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
+    cache::ScopeLookup,
     maybe_local::MaybeLocal,
     options_combine,
     utils::{new_buster_id, KeyHash},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
-    QueryClient, QueryOptions,
+    QueryOptions,
 };
 
 pub(crate) struct Query<V> {
@@ -36,32 +37,32 @@ impl<V> Debug for Query<V> {
 }
 
 impl<V> Query<V> {
-    pub fn new<K>(
-        client: QueryClient,
+    pub fn new(
+        client_options: QueryOptions,
+        scope_lookup: ScopeLookup,
         cache_key: TypeId,
-        key: &KeyHash,
+        key_hash: &KeyHash,
         value: MaybeLocal<V>,
         buster: ArcRwSignal<u64>,
         scope_options: Option<QueryOptions>,
         active_resources: Option<Arc<Mutex<HashSet<u64>>>>,
     ) -> Self
     where
-        K: Clone + Eq + Hash + 'static,
         V: 'static,
     {
-        let combined_options = options_combine(client.options(), scope_options);
+        let combined_options = options_combine(client_options, scope_options);
         let active_resources =
             active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
 
         let gc_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.gc_time() < Duration::from_secs(60 * 60 * 24 * 365)
         {
-            let key = *key;
+            let key_hash = *key_hash;
             let active_resources = active_resources.clone();
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
-                    client.scope_lookup.gc_query::<K, V>(cache_key, &key);
+                    scope_lookup.gc_query::<V>(cache_key, &key_hash);
                     true
                 } else {
                     false
@@ -75,21 +76,17 @@ impl<V> Query<V> {
         let refetch_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.refetch_interval().is_some()
         {
-            let key = *key;
+            let key_hash = *key_hash;
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
             Some(Arc::new(SendWrapper::new(Box::new(move || {
-                client.scope_lookup.with_cached_scope_mut::<K, V, _>(
-                    cache_key,
-                    false,
-                    |maybe_scope| {
-                        // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
-                        if let Some(scope) = maybe_scope {
-                            if let Some(cached) = scope.get_mut_with_key_hash(&key) {
-                                cached.invalidate();
-                            }
+                scope_lookup.with_cached_scope_mut::<V, _>(cache_key, false, |maybe_scope| {
+                    // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
+                    if let Some(scope) = maybe_scope {
+                        if let Some(cached) = scope.get_mut(&key_hash) {
+                            cached.invalidate();
                         }
-                    },
-                );
+                    }
+                });
             }) as Box<dyn Fn()>)))
         } else {
             None
