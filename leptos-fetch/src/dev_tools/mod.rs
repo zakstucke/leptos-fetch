@@ -1,4 +1,4 @@
-/// [`QueryDevtools`] is provided to help visualize all of the inner workings of Leptos Fetch and will likely save you hours of debugging if you find yourself in a pinch!
+/// [`QueryDevtools`] is provided to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging!
 ///
 /// To enable, the `devtools` feature must be added, the component won't be shown or included in the binary when you build your app in release mode for performance.
 ///

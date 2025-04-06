@@ -20,10 +20,12 @@ All notable changes to this project are documented in this file.
     - `set_local_query` -> `set_query_local`
 
 ### Added
-- For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. Customize with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/0.3.1/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
+- For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. Customize with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
+- A devtools component has been added under the feature flag `devtools` to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging. See relevant section in the [README](https://docs.rs/leptos-fetch/latest/leptos_fetch/#devtools). ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
 
 ### Fixed
 - Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
+- Subscription bugs ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
 
 ### Tests
 

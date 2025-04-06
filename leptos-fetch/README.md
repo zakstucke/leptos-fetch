@@ -146,7 +146,7 @@ async fn get_track(id: i32) -> String {
     <img src="https://raw.githubusercontent.com/zakstucke/leptos-query/main/devtools_modal.jpg" alt="Devtools Modal"/>
 </p>
 
-[`QueryDevtools`](https://docs.rs/leptos-fetch/latest/leptos_fetch/fn.QueryDevtools.html) is provided to help visualize all of the inner workings of Leptos Fetch and will likely save you hours of debugging if you find yourself in a pinch!
+[`QueryDevtools`](https://docs.rs/leptos-fetch/latest/leptos_fetch/fn.QueryDevtools.html) is provided to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging!
 
 To enable, the `devtools` feature must be added, the component won't be shown or included in the binary when you build your app in release mode for performance.
 
