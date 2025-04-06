@@ -6,7 +6,7 @@
 ![Crates.io MSRV](https://img.shields.io/crates/msrv/leptos-fetch)
 [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/zakstucke/leptos-fetch/rust.yml?branch=main&style=for-the-badge" height="20">](https://github.com/zakstucke/leptos-fetch/actions?query=branch%3Amain)
 
-Leptos Fetch is an async state management library for [Leptos](https://github.com/leptos-rs/leptos). LF is a refined and enhanced successor to [Leptos Query](https://github.com/gaucho-labs/leptos-query), following a year of inactivity.
+Leptos Fetch is an async state management library for [Leptos](https://github.com/leptos-rs/leptos). LF is a refined and enhanced successor to [Leptos Query](https://github.com/gaucho-labs/leptos-fetch), following a year of inactivity.
 
 **PR's for bugfixes, documentation, performance, features and examples are very welcome!**
 
@@ -18,6 +18,7 @@ LF provides:
 - Refetch intervals
 - Memory management with cache lifetimes
 - Optimistic updates
+- Debugging tools
 - Declarative query interaction as a supplement to leptos resources
 - In `ssr`, custom stream encoding at a global level
 
@@ -140,6 +141,41 @@ async fn get_track(id: i32) -> String {
 }
 ```
 
+### Devtools
+<p align="start">
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_modal.jpg" alt="Devtools Modal"/>
+</p>
+
+[`QueryDevtools`](https://docs.rs/leptos-fetch/latest/leptos_fetch/fn.QueryDevtools.html) is provided to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging!
+
+To enable, the `devtools` feature must be added, the component won't be shown or included in the binary when you build your app in release mode for performance.
+
+If you need the devtools component in release mode too, you can use the `devtools-always` feature instead.
+
+```bash
+cargo add leptos-fetch --feature devtools
+```
+
+```rust,ignore
+use leptos::*;
+use leptos_fetch::{QueryClient, QueryDevtools};
+#[component]
+fn App() -> impl IntoView {
+   let client = QueryClient::new().provide();
+    view!{
+        // This will render the devtools as a small widget in the bottom-right of the screen, 
+        // this will only show in development mode.
+        <QueryDevtools client=client />
+        // Rest of App...
+    }
+}
+```
+
+In the bottom right of the screen, this widget should appear and be clickable to open the devtools:
+<p align="start">
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_widget.jpg" alt="Devtools widget"/>
+</p>
+
 ## Query Options
 
 The [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) struct can be used to configure the following:
@@ -216,7 +252,7 @@ Subscriptions allow you to reactively respond to a query's lifecycle outside of 
 ## Thread Local and Threadsafe Variants
 If using SSR, some resources will initially load on the server, in this case multiple threads are in use. 
 
-To prevent needing all types to be `Sync` + `Send`, `_local()` variants of many functions exist that do not require `Send` + `Sync`. `_local()` variants also will not stream from the server to the client in `ssr`, therefore do not need `serde` implementations.
+To prevent needing all types to be `Sync` + `Send`, `_local()` variants of many functions exist that do not require `Send` + `Sync`. `_local()` variants also will not stream from the server to the client in `ssr`, therefore do not need to implement codec traits.
 
 This is achieved by internally utilising a threadsafe cache, alongside a local cache per thread, abstracting this away to expose a singular combined cache. 
 

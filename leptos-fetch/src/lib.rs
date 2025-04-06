@@ -8,19 +8,35 @@
 #![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_auto_cfg))]
 
 mod cache;
+mod debug_if_devtools_enabled;
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
+mod events;
 mod maybe_local;
 mod query;
 mod query_client;
 mod query_options;
 mod query_scope;
 mod resource_drop_guard;
-mod subscriptions;
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
+mod subs_client;
+mod subs_scope;
 mod utils;
 mod value_with_callbacks;
 
+#[cfg(any(feature = "devtools", feature = "devtools-always"))]
+mod dev_tools;
+#[cfg(any(feature = "devtools", feature = "devtools-always"))]
+pub use dev_tools::QueryDevtools;
+
 pub use query_client::*;
 pub use query_options::*;
-pub use query_scope::*;
+pub use query_scope::{QueryScope, QueryScopeLocal};
 
 #[cfg(test)]
 mod test {
@@ -30,7 +46,7 @@ mod test {
         ptr::NonNull,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Once,
+            Arc,
         },
     };
 
@@ -281,7 +297,7 @@ mod test {
     }
 
     fn identify_parking_lot_deadlocks() {
-        static ONCE: Once = Once::new();
+        static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(5));
@@ -615,6 +631,7 @@ mod test {
 
                 macro_rules! check {
                     ($get_resource:expr) => {{
+                        let subscribed = client.subscribe_value(fetcher.clone(), move || 2);
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
@@ -622,12 +639,14 @@ mod test {
                             // Initial caching:
                             with_tmp_owner! {{
                                 assert_eq!($get_resource().await, 4);
+                                assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
 
                                 // < gc_time shouldn't have cleaned up:
                                 tick!();
                                 assert_eq!($get_resource().await, 4);
+                                assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
                             }}
@@ -636,6 +655,7 @@ mod test {
                             with_tmp_owner! {{
                                 tick!();
                                 assert_eq!($get_resource().await, 4);
+                                assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
                             }}
@@ -649,6 +669,7 @@ mod test {
 
                                 // >gc_time shouldn't cleanup because there's an active resource:
                                 assert_eq!($get_resource().await, 4);
+                                assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
                             }}
@@ -657,8 +678,10 @@ mod test {
                             with_tmp_owner! {{
                                 assert_eq!(client.size(), 1);
 
+                                assert_eq!(subscribed.get_untracked(), Some(4));
                                 tokio::time::sleep(tokio::time::Duration::from_millis(GC_TIME_MS)).await;
                                 tick!();
+                                assert_eq!(subscribed.get_untracked(), None);
 
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
@@ -668,6 +691,7 @@ mod test {
                             tokio::time::sleep(tokio::time::Duration::from_millis(GC_TIME_MS)).await;
                             tick!();
                             assert_eq!(client.size(), 0);
+                            assert_eq!(subscribed.get_untracked(), None);
                         }
                     }};
                 }
@@ -728,6 +752,7 @@ mod test {
                 macro_rules! check {
                     ($get_resource:expr) => {{
                         let resource = $get_resource();
+                        let subscribed = client.subscribe_value_local(fetcher.clone(), move || 2);
 
                         // Should be None initially with the sync methods:
                         assert!(resource.get_untracked().is_none());
@@ -736,15 +761,18 @@ mod test {
                         assert!(resource.try_get().unwrap().is_none());
                         assert!(resource.read().is_none());
                         assert!(resource.try_read().as_deref().unwrap().is_none());
+                        assert!(subscribed.get_untracked().is_none());
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) {
                             assert_eq!(resource.await, UnsyncValue::new(4));
+                            assert_eq!(subscribed.get_untracked(), Some(UnsyncValue::new(4)));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             tick!();
 
                             assert_eq!($get_resource().await, UnsyncValue::new(4));
+                            assert_eq!(subscribed.get_untracked(), Some(UnsyncValue::new(4)));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                         }
                     }};
@@ -762,10 +790,9 @@ mod test {
             .await;
     }
 
-    /// Make sure subscriptions track updates correclty, and gc themselves when they're dropped.
     #[rstest]
     #[tokio::test]
-    async fn test_subscriptions(
+    async fn test_subscribe_is_fetching_and_loading(
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
         #[values(false, true)] server_ctx: bool,
@@ -782,31 +809,24 @@ mod test {
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!(client.subscriber_count(), 0);
                             let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
-                            let is_fetching_copy = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
                             assert_eq!(is_fetching.get_untracked(), false);
-                            assert_eq!(is_fetching_copy.get_untracked(), false);
-                            // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 1);
                             let is_fetching_other = client.subscribe_is_fetching_arc(fetcher.clone(), || 3);
                             assert_eq!(is_fetching_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 2);
                             let is_loading = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
-                            let is_loading_copy = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
                             assert_eq!(is_loading.get_untracked(), false);
-                            assert_eq!(is_loading_copy.get_untracked(), false);
-                            // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 3);
                             let is_loading_other = client.subscribe_is_loading_arc(fetcher.clone(), || 3);
                             assert_eq!(is_loading_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 4);
 
+
                             macro_rules! check_all {
                                 ($expected:expr) => {{
                                     assert_eq!(is_fetching.get_untracked(), $expected);
-                                    assert_eq!(is_fetching_copy.get_untracked(), $expected);
                                     assert_eq!(is_fetching_other.get_untracked(), $expected);
                                     assert_eq!(is_loading.get_untracked(), $expected);
-                                    assert_eq!(is_loading_copy.get_untracked(), $expected);
                                     assert_eq!(is_loading_other.get_untracked(), $expected);
                                 }};
                             }
@@ -822,10 +842,8 @@ mod test {
                                     tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
-                                        assert_eq!(is_fetching_copy.get_untracked(), true);
                                         assert_eq!(is_fetching_other.get_untracked(), false);
                                         assert_eq!(is_loading.get_untracked(), true);
-                                        assert_eq!(is_loading_copy.get_untracked(), true);
                                         assert_eq!(is_loading_other.get_untracked(), false);
                                         tick!();
                                     }
@@ -870,12 +888,10 @@ mod test {
                                     tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
-                                        assert_eq!(is_fetching_copy.get_untracked(), true);
                                         assert_eq!(is_fetching_other.get_untracked(), false);
                                         // Loading should all be false as this is just a refetch now, 
                                         // the get_resource().await will actually return straight away, but it'll trigger the refetch.
                                         assert_eq!(is_loading.get_untracked(), false);
-                                        assert_eq!(is_loading_copy.get_untracked(), false);
                                         assert_eq!(is_loading_other.get_untracked(), false);
                                         tick!();
                                     }
@@ -884,11 +900,6 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
 
                             drop(is_fetching);
-                            // Should still be 4 as the copy wasn't dropped:
-                            assert_eq!(client.subscriber_count(), 4);
-                            drop(is_fetching_copy);
-                            assert_eq!(client.subscriber_count(), 3);
-                            drop(is_loading_copy);
                             assert_eq!(client.subscriber_count(), 3);
                             drop(is_loading);
                             assert_eq!(client.subscriber_count(), 2);
@@ -1115,6 +1126,7 @@ mod test {
                 macro_rules! check {
                     ($get_resource:expr) => {{
                         let resource = $get_resource();
+                        let subscribed = client.subscribe_value(fetcher.clone(), move || add_size.get());
 
                         // Should be None initially with the sync methods:
                         assert!(resource.get_untracked().is_none());
@@ -1123,11 +1135,13 @@ mod test {
                         assert!(resource.try_get().unwrap().is_none());
                         assert!(resource.read().is_none());
                         assert!(resource.try_read().as_deref().unwrap().is_none());
+                        assert_eq!(subscribed.get_untracked(), None);
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!(resource.await, 2);
                             assert_eq!($get_resource().await, 2);
+                            assert_eq!(subscribed.get_untracked(), Some(2));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             // Update the resource key:
@@ -1140,6 +1154,7 @@ mod test {
                             if resource_type != ResourceType::Local {
                                 assert_eq!($get_resource().await, 2);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                                assert_eq!(subscribed.get_untracked(), Some(2));
                             }
 
                             // Wait for the new to complete:
@@ -1150,6 +1165,7 @@ mod test {
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
                             assert_eq!($get_resource().await, 4);
+                            assert_eq!(subscribed.get_untracked(), Some(4));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
                         }
                     }};
