@@ -6,33 +6,150 @@ use send_wrapper::SendWrapper;
 
 use crate::{
     cache::ScopeLookup,
+    debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
+    query_scope::QueryTypeInfo,
     utils::{new_buster_id, KeyHash},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
     QueryOptions,
 };
 
-pub(crate) struct Query<V> {
-    pub value_maybe_stale: GcValue<V>,
-    combined_options: QueryOptions,
-    // When None has been forcefully made stale/invalidated:
-    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+pub(crate) struct Query<V: 'static> {
+    value_maybe_stale: GcValue<V>,
+    pub combined_options: QueryOptions,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    invalidated: bool,
     /// Will always be None on the server, hence the SendWrapper is fine:
     gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>,
     /// Will always be None on the server, hence the SendWrapper is fine:
     refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn()>>>>,
-    pub active_resources: Arc<Mutex<HashSet<u64>>>,
+    active_resources: Arc<Mutex<HashSet<u64>>>,
     pub buster: ArcRwSignal<u64>,
+    scope_lookup: ScopeLookup,
+    cache_key: TypeId,
+    key_hash: KeyHash,
+    #[cfg(any(
+        all(debug_assertions, feature = "devtools"),
+        feature = "devtools-always"
+    ))]
+    pub debug_key: crate::utils::DebugValue,
+    #[cfg(any(
+        all(debug_assertions, feature = "devtools"),
+        feature = "devtools-always"
+    ))]
+    pub events: crate::events::Events,
+}
+
+impl<V> Drop for Query<V> {
+    fn drop(&mut self) {
+        self.scope_lookup
+            .scope_subscriptions_mut()
+            .notify_value_set_updated_or_removed::<V>(self.cache_key, self.key_hash);
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        self.scope_lookup
+            .scope_subscriptions_mut()
+            .notify_active_resource_change(self.cache_key, self.key_hash, 0);
+    }
+}
+
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
+pub(crate) trait DynQuery {
+    fn key_hash(&self) -> &KeyHash;
+
+    fn debug_key(&self) -> &crate::utils::DebugValue;
+
+    fn debug_value_may_panic(&self) -> crate::utils::DebugValue;
+
+    fn value_type_id(&self) -> TypeId;
+
+    fn combined_options(&self) -> QueryOptions;
+
+    fn updated_at(&self) -> chrono::DateTime<chrono::Utc>;
+
+    fn events(&self) -> &[crate::events::Event];
+
+    /// Option when already stale.
+    fn till_stale(&self) -> Option<Duration>;
+
+    fn is_invalidated(&self) -> bool;
+
+    fn active_resources_len(&self) -> usize;
+}
+
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
+impl<V> DynQuery for Query<V>
+where
+    V: DebugIfDevtoolsEnabled + 'static,
+{
+    fn key_hash(&self) -> &KeyHash {
+        &self.key_hash
+    }
+
+    fn debug_key(&self) -> &crate::utils::DebugValue {
+        &self.debug_key
+    }
+
+    fn debug_value_may_panic(&self) -> crate::utils::DebugValue {
+        crate::utils::DebugValue::new(self.value_maybe_stale.value().value_may_panic())
+    }
+
+    fn value_type_id(&self) -> TypeId {
+        TypeId::of::<V>()
+    }
+
+    fn combined_options(&self) -> QueryOptions {
+        self.combined_options
+    }
+
+    fn updated_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.updated_at
+    }
+
+    fn events(&self) -> &[crate::events::Event] {
+        &self.events
+    }
+
+    /// Option when already stale.
+    fn till_stale(&self) -> Option<Duration> {
+        if self.stale() {
+            None
+        } else {
+            let stale_after = self.updated_at + self.combined_options.stale_time();
+            let now = chrono::Utc::now();
+            let till_stale = stale_after - now;
+            if till_stale < chrono::TimeDelta::zero() {
+                return None;
+            }
+            Some(
+                till_stale
+                    .to_std()
+                    .expect("Could not convert to std duration"),
+            )
+        }
+    }
+
+    fn is_invalidated(&self) -> bool {
+        self.invalidated
+    }
+
+    fn active_resources_len(&self) -> usize {
+        self.active_resources.lock().len()
+    }
 }
 
 impl<V> Debug for Query<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Query")
-            .field("value", &std::any::type_name::<V>())
-            .field("combined_options", &self.combined_options)
-            .field("updated_at", &self.updated_at)
-            .finish()
+        f.debug_struct("Query").finish()
     }
 }
 
@@ -40,16 +157,27 @@ impl<V> Query<V> {
     pub fn new(
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
-        cache_key: TypeId,
-        key_hash: &KeyHash,
+        query_type_info: &QueryTypeInfo,
+        key_hash: KeyHash,
         value: MaybeLocal<V>,
         buster: ArcRwSignal<u64>,
         scope_options: Option<QueryOptions>,
         active_resources: Option<Arc<Mutex<HashSet<u64>>>>,
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        debug_key: crate::utils::DebugValue,
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        event: crate::events::Event,
     ) -> Self
     where
-        V: 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
+        let cache_key = query_type_info.cache_key;
         let combined_options = options_combine(client_options, scope_options);
         let active_resources =
             active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
@@ -57,12 +185,11 @@ impl<V> Query<V> {
         let gc_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.gc_time() < Duration::from_secs(60 * 60 * 24 * 365)
         {
-            let key_hash = *key_hash;
             let active_resources = active_resources.clone();
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
-                    scope_lookup.gc_query::<V>(cache_key, &key_hash);
+                    scope_lookup.gc_query::<V>(&cache_key, &key_hash);
                     true
                 } else {
                     false
@@ -76,69 +203,190 @@ impl<V> Query<V> {
         let refetch_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.refetch_interval().is_some()
         {
-            let key_hash = *key_hash;
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
+            let query_type_info = query_type_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
-                scope_lookup.with_cached_scope_mut::<V, _>(cache_key, false, |maybe_scope| {
-                    // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
-                    if let Some(scope) = maybe_scope {
-                        if let Some(cached) = scope.get_mut(&key_hash) {
-                            cached.invalidate();
+                scope_lookup.with_cached_scope_mut::<V, _>(
+                    &query_type_info,
+                    false,
+                    |maybe_scope| {
+                        // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
+                        if let Some(scope) = maybe_scope {
+                            if let Some(cached) = scope.get_mut(&key_hash) {
+                                cached.invalidate();
+                                #[cfg(any(
+                                    all(debug_assertions, feature = "devtools"),
+                                    feature = "devtools-always"
+                                ))]
+                                {
+                                    cached.events.push(crate::events::Event::new(
+                                    crate::events::EventVariant::RefetchTriggeredViaInvalidation,
+                                ));
+                                }
+                            }
                         }
-                    }
-                });
+                    },
+                );
             }) as Box<dyn Fn()>)))
         } else {
             None
         };
 
+        let created_at = chrono::Utc::now();
         Self {
+            #[cfg(any(
+                all(debug_assertions, feature = "devtools"),
+                feature = "devtools-always"
+            ))]
+            debug_key,
+            #[cfg(any(
+                all(debug_assertions, feature = "devtools"),
+                feature = "devtools-always"
+            ))]
+            events: crate::events::Events::new(&scope_lookup, cache_key, key_hash, vec![event]),
             value_maybe_stale: GcValue::new(
                 value,
                 GcHandle::new(gc_cb.clone(), combined_options.gc_time()),
                 RefetchHandle::new(refetch_cb.clone(), combined_options.refetch_interval()),
             ),
             combined_options,
-            updated_at: Some(chrono::Utc::now()),
+            updated_at: created_at,
+            invalidated: false,
             gc_cb,
             refetch_cb,
             active_resources,
             buster,
+            scope_lookup,
+            cache_key,
+            key_hash,
         }
     }
 
     pub fn mark_resource_active(&self, resource_id: u64) {
-        self.active_resources.lock().insert(resource_id);
+        let total_active = {
+            let mut guard = self.active_resources.lock();
+            guard.insert(resource_id);
+            guard.len()
+        };
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        {
+            self.scope_lookup
+                .scope_subscriptions_mut()
+                .notify_active_resource_change(self.cache_key, self.key_hash, total_active);
+        }
+        let _ = total_active;
     }
 
     pub fn mark_resource_dropped(&self, resource_id: u64) {
-        self.active_resources.lock().remove(&resource_id);
+        let total_active = {
+            let mut guard = self.active_resources.lock();
+            guard.remove(&resource_id);
+            guard.len()
+        };
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        {
+            self.scope_lookup
+                .scope_subscriptions_mut()
+                .notify_active_resource_change(self.cache_key, self.key_hash, total_active);
+        }
+        let _ = total_active;
     }
 
     pub fn invalidate(&mut self) {
-        self.updated_at = None;
+        self.invalidated = true;
         // To re-trigger all active resources automatically on manual invalidation:
         self.buster.set(new_buster_id());
-    }
-
-    pub fn stale(&self) -> bool {
-        if let Some(updated_at) = self.updated_at {
-            let stale_after = updated_at + self.combined_options.stale_time();
-            chrono::Utc::now() > stale_after
-        } else {
-            true
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        {
+            self.events.push(crate::events::Event::new(
+                crate::events::EventVariant::Invalidated,
+            ));
         }
     }
 
-    pub fn set_value(&mut self, new_value: MaybeLocal<V>) {
-        self.value_maybe_stale = GcValue::new(
-            new_value,
+    pub fn stale(&self) -> bool {
+        if self.invalidated {
+            true
+        } else {
+            let stale_after = self.updated_at + self.combined_options.stale_time();
+            chrono::Utc::now() > stale_after
+        }
+    }
+
+    pub fn value_maybe_stale(&self) -> &MaybeLocal<V> {
+        self.value_maybe_stale.value()
+    }
+
+    pub fn set_value(
+        &mut self,
+        new_value: MaybeLocal<V>,
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        event: crate::events::Event,
+    ) where
+        V: DebugIfDevtoolsEnabled + 'static,
+    {
+        self.update_value(
+            |value| {
+                *value = new_value;
+            },
+            #[cfg(any(
+                all(debug_assertions, feature = "devtools"),
+                feature = "devtools-always"
+            ))]
+            event,
+        );
+    }
+
+    pub fn update_value<T>(
+        &mut self,
+        cb: impl FnOnce(&mut MaybeLocal<V>) -> T,
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        event: crate::events::Event,
+    ) -> T
+    where
+        V: DebugIfDevtoolsEnabled + 'static,
+    {
+        let result = cb(self.value_maybe_stale.value_mut());
+        self.value_maybe_stale.reset_callbacks(
             GcHandle::new(self.gc_cb.clone(), self.combined_options.gc_time()),
             RefetchHandle::new(
                 self.refetch_cb.clone(),
                 self.combined_options.refetch_interval(),
             ),
         );
-        self.updated_at = Some(chrono::Utc::now());
+
+        #[cfg(any(
+            all(debug_assertions, feature = "devtools"),
+            feature = "devtools-always"
+        ))]
+        {
+            self.events.push(event);
+        }
+
+        self.invalidated = false;
+        self.updated_at = chrono::Utc::now();
+        // To update all existing resources:
+        self.buster.set(new_buster_id());
+
+        self.scope_lookup
+            .scope_subscriptions_mut()
+            .notify_value_set_updated_or_removed::<V>(self.cache_key, self.key_hash);
+
+        result
     }
 }

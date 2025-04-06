@@ -21,25 +21,22 @@ impl<V> GcValue<V> {
         }
     }
 
-    pub fn into_value_maybe_local(mut self) -> MaybeLocal<V> {
+    /// Reset after updating the value:
+    pub fn reset_callbacks(&mut self, gc_handle: GcHandle, refetch_handle: RefetchHandle) {
         self.gc_handle.cancel();
-        self.value.take().expect("value already taken, bug")
+        self.refetch_handle.cancel();
+        self.gc_handle = gc_handle;
+        self.refetch_handle = refetch_handle;
     }
 
     #[track_caller]
-    pub fn value(&self) -> &V {
-        self.value
-            .as_ref()
-            .expect("value already taken, bug")
-            .value()
+    pub fn value(&self) -> &MaybeLocal<V> {
+        self.value.as_ref().expect("value already taken, bug")
     }
 
     #[track_caller]
-    pub fn value_is_local(&self) -> bool {
-        self.value
-            .as_ref()
-            .expect("value already taken, bug")
-            .is_local()
+    pub fn value_mut(&mut self) -> &mut MaybeLocal<V> {
+        self.value.as_mut().expect("value already taken, bug")
     }
 }
 

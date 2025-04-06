@@ -16,8 +16,8 @@ path = "src/lib.rs"
 
 [features]
 ssr = ["leptos/ssr"]
-# hydrate = ["leptos/hydrate"]
-# csr = ["leptos/csr"]
+devtools = []
+devtools-always = []
 
 [build-dependencies]
 rustc_version = "0.4"
@@ -28,12 +28,15 @@ all-features = true
 
 [dependencies]
 chrono.workspace = true
+chrono-humanize.workspace = true
 futures.workspace = true
 codee.workspace = true
 leptos.workspace = true
 paste.workspace = true
 parking_lot.workspace = true
 send_wrapper.workspace = true
+web-sys.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 any_spawner = { workspace = true, features = ["tokio"] }
@@ -41,4 +44,4 @@ codee = { workspace = true, features = ["msgpack_serde"] }
 hydration_context.workspace = true
 rstest = "0.25"
 tokio = { version = "1", features = ["full"] }
-parking_lot = {workspace = true, features = ["deadlock_detection"] }
+parking_lot = { workspace = true, features = ["deadlock_detection"] }

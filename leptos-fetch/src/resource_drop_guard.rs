@@ -24,7 +24,16 @@ where
     }
 
     pub fn set_active_key(&self, active_key_hash: KeyHash) {
-        self.0.lock().active_key_hash = Some(active_key_hash);
+        let mut guard = self.0.lock();
+        // If key changing, should mark the previous as dropped:
+        if let Some(active_key_hash) = guard.active_key_hash {
+            guard.scope_lookup.mark_resource_dropped::<V>(
+                &active_key_hash,
+                &guard.cache_key,
+                guard.resource_id,
+            );
+        }
+        guard.active_key_hash = Some(active_key_hash);
     }
 }
 
