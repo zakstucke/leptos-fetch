@@ -143,7 +143,7 @@ async fn get_track(id: i32) -> String {
 
 ### Devtools
 <p align="start">
-    <img src="https://raw.githubusercontent.com/zakstucke/leptos-query/main/devtools_modal.jpg" alt="Devtools Modal"/>
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_modal.jpg" alt="Devtools Modal"/>
 </p>
 
 [`QueryDevtools`](https://docs.rs/leptos-fetch/latest/leptos_fetch/fn.QueryDevtools.html) is provided to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging!
@@ -173,7 +173,7 @@ fn App() -> impl IntoView {
 
 In the bottom right of the screen, this widget should appear and be clickable to open the devtools:
 <p align="start">
-    <img src="https://raw.githubusercontent.com/zakstucke/leptos-query/main/devtools_widget.jpg" alt="Devtools widget"/>
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_widget.jpg" alt="Devtools widget"/>
 </p>
 
 ## Query Options
