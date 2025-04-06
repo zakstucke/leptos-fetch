@@ -156,7 +156,7 @@ If you need the devtools component in release mode too, you can use the `devtool
 cargo add leptos-fetch --feature devtools
 ```
 
-```rust,no_run
+```rust,ignore
 use leptos::*;
 use leptos_fetch::{QueryClient, QueryDevtools};
 #[component]
