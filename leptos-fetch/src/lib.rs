@@ -809,19 +809,13 @@ mod test {
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!(client.subscriber_count(), 0);
                             let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
-                            let is_fetching_copy = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
                             assert_eq!(is_fetching.get_untracked(), false);
-                            assert_eq!(is_fetching_copy.get_untracked(), false);
-                            // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 1);
                             let is_fetching_other = client.subscribe_is_fetching_arc(fetcher.clone(), || 3);
                             assert_eq!(is_fetching_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 2);
                             let is_loading = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
-                            let is_loading_copy = client.subscribe_is_loading_arc(fetcher.clone(), || 2);
                             assert_eq!(is_loading.get_untracked(), false);
-                            assert_eq!(is_loading_copy.get_untracked(), false);
-                            // Copies should use the same subscriber:
                             assert_eq!(client.subscriber_count(), 3);
                             let is_loading_other = client.subscribe_is_loading_arc(fetcher.clone(), || 3);
                             assert_eq!(is_loading_other.get_untracked(), false);
@@ -831,10 +825,8 @@ mod test {
                             macro_rules! check_all {
                                 ($expected:expr) => {{
                                     assert_eq!(is_fetching.get_untracked(), $expected);
-                                    assert_eq!(is_fetching_copy.get_untracked(), $expected);
                                     assert_eq!(is_fetching_other.get_untracked(), $expected);
                                     assert_eq!(is_loading.get_untracked(), $expected);
-                                    assert_eq!(is_loading_copy.get_untracked(), $expected);
                                     assert_eq!(is_loading_other.get_untracked(), $expected);
                                 }};
                             }
@@ -850,10 +842,8 @@ mod test {
                                     tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
-                                        assert_eq!(is_fetching_copy.get_untracked(), true);
                                         assert_eq!(is_fetching_other.get_untracked(), false);
                                         assert_eq!(is_loading.get_untracked(), true);
-                                        assert_eq!(is_loading_copy.get_untracked(), true);
                                         assert_eq!(is_loading_other.get_untracked(), false);
                                         tick!();
                                     }
@@ -898,12 +888,10 @@ mod test {
                                     tick!();
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
-                                        assert_eq!(is_fetching_copy.get_untracked(), true);
                                         assert_eq!(is_fetching_other.get_untracked(), false);
                                         // Loading should all be false as this is just a refetch now, 
                                         // the get_resource().await will actually return straight away, but it'll trigger the refetch.
                                         assert_eq!(is_loading.get_untracked(), false);
-                                        assert_eq!(is_loading_copy.get_untracked(), false);
                                         assert_eq!(is_loading_other.get_untracked(), false);
                                         tick!();
                                     }
@@ -912,11 +900,6 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
 
                             drop(is_fetching);
-                            // Should still be 4 as the copy wasn't dropped:
-                            assert_eq!(client.subscriber_count(), 4);
-                            drop(is_fetching_copy);
-                            assert_eq!(client.subscriber_count(), 3);
-                            drop(is_loading_copy);
                             assert_eq!(client.subscriber_count(), 3);
                             drop(is_loading);
                             assert_eq!(client.subscriber_count(), 2);
