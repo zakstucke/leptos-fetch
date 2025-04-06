@@ -8,7 +8,7 @@
 /// cargo add leptos-fetch --feature devtools
 /// ```
 ///
-/// ```rust,no_run
+/// ```rust,skip
 /// use leptos::*;
 /// use leptos_fetch::{QueryClient, QueryDevtools};
 /// #[component]
