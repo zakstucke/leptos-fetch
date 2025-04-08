@@ -38,8 +38,9 @@ LF also allows you to interact declaratively with queries outside resources, sub
 - [Query Options](#query-options)
 - [Declarative Query Interactions](#declarative-query-management)
 - [Subscriptions](#subscriptions)
-- [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Thread Local & Threadsafe Variants](#thread-local-and-threadsafe-variants)
 - [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
+- [Pagination & Infinite Queries](#pagination-and-infinite-queries)
 
 ## Installation
 
@@ -228,7 +229,7 @@ fn foo() {
 
 ## Declarative Query Interactions
 
-Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
+Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [map (async)](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
 
 ### Query Invalidation
 
@@ -288,6 +289,80 @@ type MyQueryClient = QueryClient<MsgpackSerdeCodec>;
 QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
 
 let client: MyQueryClient = expect_context();
+```
+
+## Pagination and Infinite Queries
+
+Pagination can be achieved simply with basic primitives:
+```rust,no_run
+use leptos::prelude::*;
+
+#[derive(Clone, Debug)]
+struct Page;
+
+async fn get_page(page_index: usize) -> Page {
+    Page
+}
+
+let client = leptos_fetch::QueryClient::new();
+
+// Initial page is 0:
+let active_page_index = RwSignal::new(0);
+
+// The resource is reactive over the active_page_index signal:
+let resource = client.local_resource(get_page, move || active_page_index.get());
+
+// Update the page to 1:
+active_page_index.set(1);
+```
+
+Likewise with infinite queries, the [`QueryClient::map_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query) makes it easy with a single cache key:
+
+```rust,no_run
+use leptos::prelude::*;
+
+#[derive(Clone, Debug)]
+struct InfiniteItem(usize);
+
+#[derive(Clone, Debug)]
+struct InfiniteList {
+    items: Vec<InfiniteItem>,
+    offset: usize,
+    more_available: bool,
+}
+
+async fn get_list_items(offset: usize) -> Vec<InfiniteItem> {
+    (offset..offset + 10).map(InfiniteItem).collect()
+}
+
+async fn get_list_query(_key: ()) -> InfiniteList {
+    let items = get_list_items(0).await;
+    InfiniteList {
+        offset: items.len(),
+        more_available: !items.is_empty(),
+        items,
+    }
+}
+
+let client = leptos_fetch::QueryClient::new();
+
+// Initialise the query with the first load.
+// we're not using a reactive key here for extending the list, but declarative updates instead.
+let resource = client.local_resource(get_list_query, || ());
+
+async {
+    // When wanting to load more items, map_query can be called declaratively to update the cached item and resource:
+    client
+        .map_query(get_list_query, (), async |last| {
+            if last.more_available {
+                let next_items = get_list_items(last.offset).await;
+                last.offset += next_items.len();
+                last.more_available = !next_items.is_empty();
+                last.items.extend(next_items);
+            }
+        })
+        .await;
+};
 ```
 
 <!-- cargo-rdme end -->

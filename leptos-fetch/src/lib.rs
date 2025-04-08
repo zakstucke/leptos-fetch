@@ -425,12 +425,85 @@ mod test {
             .await;
     }
 
+    // Good example test, nothing new in here though:
+    #[rstest]
+    #[tokio::test]
+    async fn test_infinite() {
+        identify_parking_lot_deadlocks();
+
+        // ssr won't load local_resources, which is what we're testing with to avoid needing serde impls.
+        #[cfg(not(feature = "ssr"))]
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                #[derive(Clone, Debug, PartialEq, Eq)]
+                struct InfiniteItem(usize);
+
+                #[derive(Clone, Debug, PartialEq, Eq)]
+                struct InfiniteList {
+                    items: Vec<InfiniteItem>,
+                    offset: usize,
+                    more_available: bool,
+                }
+
+                async fn get_list_items(offset: usize) -> Vec<InfiniteItem> {
+                    (offset..offset + 10).map(InfiniteItem).collect()
+                }
+
+                async fn get_list_query(_key: ()) -> InfiniteList {
+                    let items = get_list_items(0).await;
+                    InfiniteList {
+                        offset: items.len(),
+                        more_available: !items.is_empty(),
+                        items,
+                    }
+                }
+
+                let (client, _guard, _owner) = prep_vari!(false);
+
+                // Initialise the query with the first load.
+                // we're not using a reactive key here for extending the list, but declarative updates instead.
+                let resource = client.local_resource(get_list_query, || ());
+                assert_eq!(
+                    resource.await,
+                    InfiniteList {
+                        items: (0..10).map(InfiniteItem).collect::<Vec<_>>(),
+                        offset: 10,
+                        more_available: true
+                    }
+                );
+
+                // When wanting to load more items, map_query can be called declaratively to update the cached item:
+                client
+                    .map_query(get_list_query, (), async |last| {
+                        if last.more_available {
+                            let next_items = get_list_items(last.offset).await;
+                            last.offset += next_items.len();
+                            last.more_available = !next_items.is_empty();
+                            last.items.extend(next_items);
+                        }
+                    })
+                    .await;
+
+                // Should've been updated in place:
+                assert_eq!(
+                    client.get_cached_query(get_list_query, ()),
+                    Some(InfiniteList {
+                        items: (0..20).map(InfiniteItem).collect::<Vec<_>>(),
+                        offset: 20,
+                        more_available: true
+                    })
+                );
+            })
+            .await;
+    }
+
     /// prefetch_query
     /// prefetch_query_local
     /// fetch_query
     /// fetch_query_local
     /// update_query
     /// query_exists
+    /// map_query
     #[rstest]
     #[tokio::test]
     async fn test_declaratives() {
@@ -478,6 +551,28 @@ mod test {
                 client.clear();
                 assert_eq!(client.size(), 0);
                 assert_eq!(client.fetch_query(&fetcher, key).await, 6);
+
+                // map_query/map_query_local:
+                assert_eq!(
+                    client
+                        .map_query(&fetcher, key, async |value| {
+                            *value += 1;
+                            *value
+                        })
+                        .await,
+                    7
+                );
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(7));
+                assert_eq!(
+                    client
+                        .map_query(&fetcher, key, async |value| {
+                            *value += 1;
+                            *value
+                        })
+                        .await,
+                    8
+                );
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(8));
             })
             .await;
     }

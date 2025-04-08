@@ -490,6 +490,7 @@ impl ScopeLookup {
         key: &K,
         fetcher: impl FnOnce(K) -> Fut,
         return_cb: impl Fn(CachedOrFetchCbInput<V>) -> CachedOrFetchCbOutput<T>,
+        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
@@ -516,31 +517,39 @@ impl ScopeLookup {
             CachedOrFetchCbOutput::Refetch => {
                 // Will probably need to fetch, unless someone fetches whilst trying to get hold of the fetch mutex:
                 let fetcher_mutex = self.fetcher_mutex::<V>(key_hash, query_type_info);
-                let _fetcher_guard = match fetcher_mutex.try_lock() {
-                    Some(fetcher_guard) => fetcher_guard,
-                    None => {
-                        // If have to wait, should check cache again in case it was fetched while waiting.
-                        let fetcher_guard = fetcher_mutex.lock().await;
-                        let next_directive = self.with_cached_query::<V, _>(
-                            &key_hash,
-                            &query_type_info.cache_key,
-                            |maybe_cached| {
-                                if let Some(cached) = maybe_cached {
-                                    cached_buster = Some(cached.buster.clone());
-                                    return_cb(CachedOrFetchCbInput {
-                                        cached,
-                                        variant: CachedOrFetchCbInputVariant::CachedUntouched,
-                                    })
-                                } else {
-                                    CachedOrFetchCbOutput::Refetch
-                                }
-                            },
-                        );
-                        match next_directive {
-                            CachedOrFetchCbOutput::Return(value) => return value,
-                            CachedOrFetchCbOutput::Refetch => fetcher_guard,
+                let _maybe_fetcher_mutex_guard_local = if maybe_preheld_fetcher_mutex_guard
+                    .is_none()
+                {
+                    let _fetcher_guard = match fetcher_mutex.try_lock() {
+                        Some(fetcher_guard) => fetcher_guard,
+                        None => {
+                            // If have to wait, should check cache again in case it was fetched while waiting.
+                            let fetcher_guard = fetcher_mutex.lock().await;
+                            let next_directive = self.with_cached_query::<V, _>(
+                                &key_hash,
+                                &query_type_info.cache_key,
+                                |maybe_cached| {
+                                    if let Some(cached) = maybe_cached {
+                                        cached_buster = Some(cached.buster.clone());
+                                        return_cb(CachedOrFetchCbInput {
+                                            cached,
+                                            variant: CachedOrFetchCbInputVariant::CachedUntouched,
+                                        })
+                                    } else {
+                                        CachedOrFetchCbOutput::Refetch
+                                    }
+                                },
+                            );
+                            match next_directive {
+                                CachedOrFetchCbOutput::Return(value) => return value,
+                                CachedOrFetchCbOutput::Refetch => fetcher_guard,
+                            }
                         }
-                    }
+                    };
+                    Some(_fetcher_guard)
+                } else {
+                    // Owned externally so not an issue.
+                    None
                 };
 
                 #[cfg(any(
