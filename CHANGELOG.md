@@ -21,7 +21,8 @@ All notable changes to this project are documented in this file.
 
 ### Added
 - For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. Customize with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
-- A devtools component has been added under the feature flag `devtools` to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging. See relevant section in the [README](https://docs.rs/leptos-fetch/latest/leptos_fetch/#devtools). ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
+- A devtools component has been added under the feature flag `devtools` to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging. See relevant section in the [README](https://docs.rs/leptos-fetch/latest/leptos_fetch/#devtools). ([#13](https://github.com/zakstucke/leptos-fetch/pull/13))
+- [`QueryClient::map_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query) added to make async updates to queries seamlessly, making patterns such as infinite queries simpler. Pagination and infinite query examples added to readme. ([#14](https://github.com/zakstucke/leptos-fetch/pull/14))
 
 ### Fixed
 - Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
