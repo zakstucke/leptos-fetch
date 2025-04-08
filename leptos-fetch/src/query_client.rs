@@ -233,6 +233,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     info.cached.value_maybe_stale().value_may_panic().clone(),
                                 )
                             },
+                            None,
                         )
                         .await
                 }
@@ -474,6 +475,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                         info.cached.value_maybe_stale().value_may_panic().clone(),
                                     )
                                 },
+                                None,
                             )
                             .await
                     }
@@ -554,8 +556,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Prefetch a query and store it in the cache.
     ///
     /// - Entry doesn't exist: fetched and stored in the cache.
-    /// - Entry exists but **not** stale: fetched and updated in the cache.
-    /// - Entry exists but stale: not refreshed, existing cache item remains.
+    /// - Entry exists but stale: fetched and updated in the cache.
+    /// - Entry exists but **not** stale: not refreshed, existing cache item remains.
     ///
     /// If the cached query changes, active resources using the query will be updated.
     #[track_caller]
@@ -578,8 +580,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Prefetch a non-threadsafe query and store it in the cache for this thread only.
     ///
     /// - Entry doesn't exist: fetched and stored in the cache.
-    /// - Entry exists but **not** stale: fetched and updated in the cache.
-    /// - Entry exists but stale: not refreshed, existing cache item remains.
+    /// - Entry exists but stale: fetched and updated in the cache.
+    /// - Entry exists but **not** stale: not refreshed, existing cache item remains.
     ///
     /// If the cached query changes, active resources using the query will be updated.
     #[track_caller]
@@ -633,6 +635,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                     }
                     CachedOrFetchCbOutput::Return(())
                 },
+                None,
             )
             .await;
     }
@@ -640,8 +643,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Fetch a query, store it in the cache and return it.
     ///
     /// - Entry doesn't exist: fetched and stored in the cache.
-    /// - Entry exists but **not** stale: fetched and updated in the cache.
-    /// - Entry exists but stale: not refreshed, existing cache item remains.
+    /// - Entry exists but stale: fetched and updated in the cache.
+    /// - Entry exists but **not** stale: not refreshed, existing cache item remains.
     ///
     /// If the cached query changes, active resources using the query will be updated.
     ///
@@ -660,6 +663,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             QueryTypeInfo::new(&query_scope),
             move |key| async move { MaybeLocal::new(query_scope.query(key).await) },
             key.borrow(),
+            None,
         )
         .await
     }
@@ -667,8 +671,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Fetch a non-threadsafe query, store it in the cache for this thread only and return it.
     ///
     /// - Entry doesn't exist: fetched and stored in the cache.
-    /// - Entry exists but **not** stale: fetched and updated in the cache.
-    /// - Entry exists but stale: not refreshed, existing cache item remains.
+    /// - Entry exists but stale: fetched and updated in the cache.
+    /// - Entry exists but **not** stale: not refreshed, existing cache item remains.
     ///
     /// If the cached query changes, active resources using the query will be updated.
     ///
@@ -687,6 +691,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             QueryTypeInfo::new_local(&query_scope),
             move |key| async move { MaybeLocal::new_local(query_scope.query(key).await) },
             key.borrow(),
+            None,
         )
         .await
     }
@@ -697,6 +702,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         query_type_info: QueryTypeInfo,
         fetcher: impl FnOnce(K) -> Fut,
         key: &K,
+        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
     ) -> V
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
@@ -729,6 +735,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                         info.cached.value_maybe_stale().value_may_panic().clone(),
                     )
                 },
+                maybe_preheld_fetcher_mutex_guard,
             )
             .await
     }
@@ -827,11 +834,13 @@ impl<Codec: 'static> QueryClient<Codec> {
             });
     }
 
-    /// Update the value of a query in the cache with a callback.
+    /// Synchronously update the value of a query in the cache with a callback.
     ///
     /// Active resources using the query will be updated.
     ///
     /// The callback takes `Option<&mut V>`, will be None if the value is not available in the cache.
+    ///
+    /// If you want async and/or always get the value, use [`QueryClient::map_query`]/[`QueryClient::map_query_local`].
     ///
     /// Returns the output of the callback.
     #[track_caller]
@@ -884,6 +893,103 @@ impl<Codec: 'static> QueryClient<Codec> {
                 .take()
                 .expect("Should never be used more than once. (bug)")(None)
         }
+    }
+
+    /// Asynchronously map a threadsafe query in the cache from one value to another.
+    ///
+    /// Unlike [`QueryClient::update_query`], this will fetch the query first, if it doesn't exist.
+    ///
+    /// Active resources using the query will be updated.
+    ///
+    /// Returns the output of the callback.
+    #[track_caller]
+    pub async fn map_query<'a, K, V, T>(
+        &'a self,
+        query_scope: impl QueryScopeTrait<K, V>,
+        key: impl Borrow<K>,
+        mapper: impl AsyncFnOnce(&mut V) -> T,
+    ) -> T
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + Send + Sync + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
+    {
+        self.map_query_inner(
+            QueryTypeInfo::new(&query_scope),
+            move |key| async move { MaybeLocal::new(query_scope.query(key).await) },
+            key.borrow(),
+            mapper,
+            MaybeLocal::new,
+        )
+        .await
+    }
+
+    /// Asynchronously map a non-threadsafe query in the cache from one value to another.
+    ///
+    /// Unlike [`QueryClient::update_query`], this will fetch the query first, if it doesn't exist.
+    ///
+    /// Active resources using the query will be updated.
+    ///
+    /// Returns the output of the callback.
+    #[track_caller]
+    pub async fn map_query_local<'a, K, V, T>(
+        &'a self,
+        query_scope: impl QueryScopeLocalTrait<K, V>,
+        key: impl Borrow<K>,
+        mapper: impl AsyncFnOnce(&mut V) -> T,
+    ) -> T
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        self.map_query_inner(
+            QueryTypeInfo::new_local(&query_scope),
+            move |key| async move { MaybeLocal::new_local(query_scope.query(key).await) },
+            key.borrow(),
+            mapper,
+            MaybeLocal::new_local,
+        )
+        .await
+    }
+
+    #[track_caller]
+    async fn map_query_inner<'a, K, V, FetcherFut, T>(
+        &'a self,
+        query_type_info: QueryTypeInfo,
+        fetcher: impl FnOnce(K) -> FetcherFut,
+        key: impl Borrow<K>,
+        mapper: impl AsyncFnOnce(&mut V) -> T,
+        into_maybe_local: impl FnOnce(V) -> MaybeLocal<V>,
+    ) -> T
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+        FetcherFut: Future<Output = MaybeLocal<V>>,
+    {
+        let key_hash = KeyHash::new(key.borrow());
+
+        // By holding the fetcher mutex from start to finish, prevent the chance of the value being fetched between the fetch async call and the external user mapper async call and the final set().
+        let fetcher_mutex = self
+            .scope_lookup
+            .fetcher_mutex::<V>(key_hash, &query_type_info);
+        let fetcher_guard = fetcher_mutex.lock().await;
+
+        let mut new_value = self
+            .fetch_inner(
+                query_type_info.clone(),
+                fetcher,
+                key.borrow(),
+                Some(&fetcher_guard),
+            )
+            .await;
+
+        // The fetch will "turn on" is_fetching during it's lifetime, but we also want it during the mapper function:
+        self.scope_lookup
+            .with_notify_fetching(query_type_info.cache_key, key_hash, false, async {
+                let result = mapper(&mut new_value).await;
+                self.set_inner::<K, V>(query_type_info, key.borrow(), into_maybe_local(new_value));
+                result
+            })
+            .await
     }
 
     /// Synchronously get a query from the cache, if it exists.

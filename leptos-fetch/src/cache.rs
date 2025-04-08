@@ -356,6 +356,33 @@ impl ScopeLookup {
         )
     }
 
+    pub async fn with_notify_fetching<T>(
+        &self,
+        cache_key: TypeId,
+        key_hash: KeyHash,
+        loading_first_time: bool,
+        fut: impl Future<Output = T>,
+    ) -> T {
+        self.scope_subscriptions_mut().notify_fetching_start(
+            cache_key,
+            key_hash,
+            loading_first_time,
+        );
+        // Notifying finished in a drop guard just in case e.g. future was cancelled to make sure still runs:
+        // Not sure if this is actually needed, added it whilst trying to fix a different bug, may as well keep it:
+        let _notify_fetching_finished_guard = OnDrop::new({
+            let self_ = *self;
+            move || {
+                self_.scope_subscriptions_mut().notify_fetching_finish(
+                    cache_key,
+                    key_hash,
+                    loading_first_time,
+                );
+            }
+        });
+        fut.await
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -490,6 +517,7 @@ impl ScopeLookup {
         key: &K,
         fetcher: impl FnOnce(K) -> Fut,
         return_cb: impl Fn(CachedOrFetchCbInput<V>) -> CachedOrFetchCbOutput<T>,
+        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
@@ -516,31 +544,39 @@ impl ScopeLookup {
             CachedOrFetchCbOutput::Refetch => {
                 // Will probably need to fetch, unless someone fetches whilst trying to get hold of the fetch mutex:
                 let fetcher_mutex = self.fetcher_mutex::<V>(key_hash, query_type_info);
-                let _fetcher_guard = match fetcher_mutex.try_lock() {
-                    Some(fetcher_guard) => fetcher_guard,
-                    None => {
-                        // If have to wait, should check cache again in case it was fetched while waiting.
-                        let fetcher_guard = fetcher_mutex.lock().await;
-                        let next_directive = self.with_cached_query::<V, _>(
-                            &key_hash,
-                            &query_type_info.cache_key,
-                            |maybe_cached| {
-                                if let Some(cached) = maybe_cached {
-                                    cached_buster = Some(cached.buster.clone());
-                                    return_cb(CachedOrFetchCbInput {
-                                        cached,
-                                        variant: CachedOrFetchCbInputVariant::CachedUntouched,
-                                    })
-                                } else {
-                                    CachedOrFetchCbOutput::Refetch
-                                }
-                            },
-                        );
-                        match next_directive {
-                            CachedOrFetchCbOutput::Return(value) => return value,
-                            CachedOrFetchCbOutput::Refetch => fetcher_guard,
+                let _maybe_fetcher_mutex_guard_local = if maybe_preheld_fetcher_mutex_guard
+                    .is_none()
+                {
+                    let _fetcher_guard = match fetcher_mutex.try_lock() {
+                        Some(fetcher_guard) => fetcher_guard,
+                        None => {
+                            // If have to wait, should check cache again in case it was fetched while waiting.
+                            let fetcher_guard = fetcher_mutex.lock().await;
+                            let next_directive = self.with_cached_query::<V, _>(
+                                &key_hash,
+                                &query_type_info.cache_key,
+                                |maybe_cached| {
+                                    if let Some(cached) = maybe_cached {
+                                        cached_buster = Some(cached.buster.clone());
+                                        return_cb(CachedOrFetchCbInput {
+                                            cached,
+                                            variant: CachedOrFetchCbInputVariant::CachedUntouched,
+                                        })
+                                    } else {
+                                        CachedOrFetchCbOutput::Refetch
+                                    }
+                                },
+                            );
+                            match next_directive {
+                                CachedOrFetchCbOutput::Return(value) => return value,
+                                CachedOrFetchCbOutput::Refetch => fetcher_guard,
+                            }
                         }
-                    }
+                    };
+                    Some(_fetcher_guard)
+                } else {
+                    // Owned externally so not an issue.
+                    None
                 };
 
                 #[cfg(any(
@@ -573,25 +609,15 @@ impl ScopeLookup {
                         );
                     }
                 }
-                self.scope_subscriptions_mut().notify_fetching_start(
-                    query_type_info.cache_key,
-                    key_hash,
-                    loading_first_time,
-                );
-                // Notifying finished in a drop guard just in case e.g. future was cancelled to make sure still runs:
-                // Not sure if this is actually needed, added it whilst trying to fix a different bug, may as well keep it:
-                let _notify_fetching_finished_guard = OnDrop::new({
-                    let self_ = *self;
-                    move || {
-                        self_.scope_subscriptions_mut().notify_fetching_finish(
-                            query_type_info.cache_key,
-                            key_hash,
-                            loading_first_time,
-                        );
-                    }
-                });
-                let new_value = fetcher(key.clone()).await;
-                drop(_notify_fetching_finished_guard);
+
+                let new_value = self
+                    .with_notify_fetching(
+                        query_type_info.cache_key,
+                        key_hash,
+                        loading_first_time,
+                        fetcher(key.clone()),
+                    )
+                    .await;
 
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
