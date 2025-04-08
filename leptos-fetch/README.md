@@ -250,6 +250,8 @@ Subscriptions allow you to reactively respond to a query's lifecycle outside of 
 
 - [`QueryClient::subscribe_is_loading`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.subscribe_is_loading) returns a `Signal<bool>` which reactively updates to `true` whenever a query is being fetched for the first time, i.e. stale data was not already in the cache. This could be used to e.g. show something before the data is ready, without having to use a fallback with the leptos `Transition` or `Suspense` components.
 
+- [`QueryClient::subscribe_value`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.subscribe_value) returns a `Signal<Option<V>>` that subscribes to the value of a query. This can be useful to react to a query value in the cache, but not prevent it being garbage collected, or trigger fetching when missing.
+
 ## Thread Local and Threadsafe Variants
 If using SSR, some resources will initially load on the server, in this case multiple threads are in use. 
 
