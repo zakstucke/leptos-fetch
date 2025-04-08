@@ -194,6 +194,7 @@ impl ScopeSubs {
         })
     }
 
+    /// NOTE: use with_notify_fetching instead.
     pub fn notify_fetching_start(
         &mut self,
         cache_key: TypeId,
@@ -233,6 +234,7 @@ impl ScopeSubs {
         }
     }
 
+    /// NOTE: use with_notify_fetching instead.
     pub fn notify_fetching_finish(
         &mut self,
         cache_key: TypeId,

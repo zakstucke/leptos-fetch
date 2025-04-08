@@ -573,6 +573,36 @@ mod test {
                     8
                 );
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(8));
+                // is_fetching should be true throughout the whole lifetime of map_query, even the external async section:
+                let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), move || key);
+                assert!(!is_fetching.get_untracked());
+                tokio::join!(
+                    async {
+                        assert_eq!(
+                            client
+                                .map_query(&fetcher, key, async |value| {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(30))
+                                        .await;
+                                    *value += 1;
+                                    *value
+                                })
+                                .await,
+                            9
+                        );
+                    },
+                    async {
+                        let elapsed = std::time::Instant::now();
+                        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                        tick!();
+                        while elapsed.elapsed().as_millis() < 25 {
+                            assert!(is_fetching.get_untracked());
+                            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+                        }
+                    }
+                );
+                // To make sure finished
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                assert!(!is_fetching.get_untracked());
             })
             .await;
     }

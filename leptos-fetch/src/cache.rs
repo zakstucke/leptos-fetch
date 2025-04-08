@@ -356,6 +356,33 @@ impl ScopeLookup {
         )
     }
 
+    pub async fn with_notify_fetching<T>(
+        &self,
+        cache_key: TypeId,
+        key_hash: KeyHash,
+        loading_first_time: bool,
+        fut: impl Future<Output = T>,
+    ) -> T {
+        self.scope_subscriptions_mut().notify_fetching_start(
+            cache_key,
+            key_hash,
+            loading_first_time,
+        );
+        // Notifying finished in a drop guard just in case e.g. future was cancelled to make sure still runs:
+        // Not sure if this is actually needed, added it whilst trying to fix a different bug, may as well keep it:
+        let _notify_fetching_finished_guard = OnDrop::new({
+            let self_ = *self;
+            move || {
+                self_.scope_subscriptions_mut().notify_fetching_finish(
+                    cache_key,
+                    key_hash,
+                    loading_first_time,
+                );
+            }
+        });
+        fut.await
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -582,25 +609,15 @@ impl ScopeLookup {
                         );
                     }
                 }
-                self.scope_subscriptions_mut().notify_fetching_start(
-                    query_type_info.cache_key,
-                    key_hash,
-                    loading_first_time,
-                );
-                // Notifying finished in a drop guard just in case e.g. future was cancelled to make sure still runs:
-                // Not sure if this is actually needed, added it whilst trying to fix a different bug, may as well keep it:
-                let _notify_fetching_finished_guard = OnDrop::new({
-                    let self_ = *self;
-                    move || {
-                        self_.scope_subscriptions_mut().notify_fetching_finish(
-                            query_type_info.cache_key,
-                            key_hash,
-                            loading_first_time,
-                        );
-                    }
-                });
-                let new_value = fetcher(key.clone()).await;
-                drop(_notify_fetching_finished_guard);
+
+                let new_value = self
+                    .with_notify_fetching(
+                        query_type_info.cache_key,
+                        key_hash,
+                        loading_first_time,
+                        fetcher(key.clone()),
+                    )
+                    .await;
 
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),

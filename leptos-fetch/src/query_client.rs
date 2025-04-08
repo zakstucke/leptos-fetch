@@ -982,10 +982,14 @@ impl<Codec: 'static> QueryClient<Codec> {
             )
             .await;
 
-        let result = mapper(&mut new_value).await;
-
-        self.set_inner::<K, V>(query_type_info, key.borrow(), into_maybe_local(new_value));
-        result
+        // The fetch will "turn on" is_fetching during it's lifetime, but we also want it during the mapper function:
+        self.scope_lookup
+            .with_notify_fetching(query_type_info.cache_key, key_hash, false, async {
+                let result = mapper(&mut new_value).await;
+                self.set_inner::<K, V>(query_type_info, key.borrow(), into_maybe_local(new_value));
+                result
+            })
+            .await
     }
 
     /// Synchronously get a query from the cache, if it exists.
