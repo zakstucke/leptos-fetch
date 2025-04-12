@@ -34,6 +34,16 @@ fn format_title(base: &str) -> Arc<String> {
     ))
 }
 
+/// A marker struct to allow query function with or without a key.
+///
+/// Ignore.
+pub struct QueryMarkerWithKey;
+
+/// A marker struct to allow query function with or without a key.
+///
+/// Ignore.
+pub struct QueryMarkerNoKey;
+
 macro_rules! define {
     ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident, $sname:literal, $sthread:literal) => {
         /// A
@@ -46,52 +56,13 @@ macro_rules! define {
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
-            query_type_id: TypeId,
+            cache_key: TypeId,
             options: QueryOptions,
             #[cfg(any(
                 all(debug_assertions, feature = "devtools"),
                 feature = "devtools-always"
             ))]
             title: Arc<String>,
-        }
-
-        impl<K, V> $name<K, V> {
-            /// Create a new
-            #[doc = $sname]
-            ///  with specific [`QueryOptions`] to only apply to this query type.
-            ///
-            /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
-            #[track_caller]
-            pub fn new<F, Fut>(query: F, options: QueryOptions) -> Self
-            where
-                F: Fn(K) -> Fut $($impl_fn_generics)* + 'static,
-                Fut: Future<Output = V> $($impl_fut_generics)* + 'static,
-            {
-                Self {
-                    query: Arc::new(move |key| Box::pin(query(key))),
-                    query_type_id: TypeId::of::<F>(),
-                    options,
-                    #[cfg(any(
-                        all(debug_assertions, feature = "devtools"),
-                        feature = "devtools-always"
-                    ))]
-                    title: format_title(std::any::type_name::<F>()),
-                }
-            }
-
-            #[cfg(any(feature = "devtools", feature = "devtools-always"))]
-            /// Set a custom query scope/type title that will show in devtools.
-            #[track_caller]
-            pub fn set_title(mut self, title: impl Into<String>) -> Self {
-                #[cfg(any(
-                    all(debug_assertions, feature = "devtools"),
-                    feature = "devtools-always"
-                ))]
-                {
-                    self.title = format_title(&title.into());
-                }
-                self
-            }
         }
 
         impl<K, V> Debug for $name<K, V> {
@@ -104,8 +75,54 @@ macro_rules! define {
         }
 
         paste! {
+            impl<K, V> $name<K, V> {
+                /// TODO might want to split off options into set_options().
+
+                /// Create a new
+                #[doc = $sname]
+                ///  with specific [`QueryOptions`] to only apply to this query type.
+                ///
+                /// If the query fn does not have a key argument, `K=()`
+                ///
+                /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
+                #[track_caller]
+                pub fn new<M>(
+                    query_scope: impl [<$name Trait>]<K, V, M> $($impl_fn_generics)* + 'static,
+                    options: QueryOptions
+                ) -> Self
+                where
+                    K: 'static $($impl_fn_generics)*,
+                    V: 'static $($impl_fn_generics)*,
+                {
+                    Self {
+                        cache_key: query_scope.cache_key(),
+                        options,
+                        #[cfg(any(
+                            all(debug_assertions, feature = "devtools"),
+                            feature = "devtools-always"
+                        ))]
+                        title: query_scope.title(),
+                        query: Arc::new(move |key| Box::pin(query_scope.query(key))),
+                    }
+                }
+
+                #[cfg(any(feature = "devtools", feature = "devtools-always"))]
+                /// Set a custom query scope/type title that will show in devtools.
+                #[track_caller]
+                pub fn set_title(mut self, title: impl Into<String>) -> Self {
+                    #[cfg(any(
+                        all(debug_assertions, feature = "devtools"),
+                        feature = "devtools-always"
+                    ))]
+                    {
+                        self.title = format_title(&title.into());
+                    }
+                    self
+                }
+            }
+
             /// Coercer trait, ignore.
-            pub trait [<$name Trait>] <K, V>
+            pub trait [<$name Trait>] <K, V, M>
             where
                 K: 'static,
                 V: 'static,
@@ -119,7 +136,7 @@ macro_rules! define {
                 fn cache_key(&self) -> TypeId;
 
                 /// Coercer trait, ignore.
-                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_;
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static;
 
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
@@ -129,7 +146,7 @@ macro_rules! define {
                 fn title(&self) -> Arc<String>;
             }
 
-            impl<K, V, F, Fut> [<$name Trait>]<K, V> for F
+            impl<K, V, F, Fut> [<$name Trait>]<K, V, QueryMarkerWithKey> for F
             where
                 K: 'static,
                 V: 'static,
@@ -141,7 +158,7 @@ macro_rules! define {
                     TypeId::of::<Self>()
                 }
 
-                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     self(key)
                 }
 
@@ -155,7 +172,32 @@ macro_rules! define {
                 }
             }
 
-            impl<K, V> [<$name Trait>]<K, V> for $name<K, V>
+            impl<V, F, Fut> [<$name Trait>]<(), V, QueryMarkerNoKey> for F
+            where
+                V: 'static,
+                F: Fn() -> Fut + 'static,
+                Fut: Future<Output = V> $($impl_fut_generics)* + 'static,
+             {
+
+                fn cache_key(&self) -> TypeId {
+                    TypeId::of::<Self>()
+                }
+
+                fn query(&self, _key: ()) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
+                    self()
+                }
+
+                #[cfg(any(
+                    all(debug_assertions, feature = "devtools"),
+                    feature = "devtools-always"
+                ))]
+                #[track_caller]
+                fn title(&self) -> Arc<String> {
+                    format_title(std::any::type_name::<Self>())
+                }
+            }
+
+            impl<K, V> [<$name Trait>]<K, V, QueryMarkerWithKey> for $name<K, V>
             where
                 K: 'static,
                 V: 'static,
@@ -165,10 +207,10 @@ macro_rules! define {
                 }
 
                 fn cache_key(&self) -> TypeId {
-                    self.query_type_id
+                    self.cache_key
                 }
 
-                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     (self.query)(key)
                 }
 
@@ -182,7 +224,7 @@ macro_rules! define {
                 }
             }
 
-            impl<K, V> [<$name Trait>]<K, V> for &$name<K, V>
+            impl<K, V> [<$name Trait>]<K, V, QueryMarkerWithKey> for &$name<K, V>
             where
                 K: 'static,
                 V: 'static,
@@ -192,10 +234,10 @@ macro_rules! define {
                 }
 
                 fn cache_key(&self) -> TypeId {
-                    self.query_type_id
+                    self.cache_key
                 }
 
-                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     (self.query)(key)
                 }
 
@@ -209,11 +251,11 @@ macro_rules! define {
                 }
             }
 
-            impl<K, V, T> [<$name Trait>]<K, V> for Arc<T>
+            impl<K, V, T, M> [<$name Trait>]<K, V, M> for Arc<T>
             where
                 K: 'static,
                 V: 'static,
-                T: [<$name Trait>]<K, V>,
+                T: [<$name Trait>]<K, V, M>,
             {
                 fn options(&self) -> Option<QueryOptions> {
                     T::options(self)
@@ -223,7 +265,7 @@ macro_rules! define {
                     T::cache_key(self)
                 }
 
-                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + '_ {
+                fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     T::query(self, key)
                 }
 
@@ -240,7 +282,7 @@ macro_rules! define {
     };
 }
 
-impl<K, V> QueryScopeLocalTrait<K, V> for QueryScope<K, V>
+impl<K, V> QueryScopeLocalTrait<K, V, QueryMarkerWithKey> for QueryScope<K, V>
 where
     K: 'static,
     V: 'static,
@@ -250,10 +292,10 @@ where
     }
 
     fn cache_key(&self) -> TypeId {
-        self.query_type_id
+        self.cache_key
     }
 
-    fn query(&self, key: K) -> impl Future<Output = V> + '_ {
+    fn query(&self, key: K) -> impl Future<Output = V> + 'static {
         (self.query)(key)
     }
 
@@ -266,7 +308,7 @@ where
     }
 }
 
-impl<K, V> QueryScopeLocalTrait<K, V> for &QueryScope<K, V>
+impl<K, V> QueryScopeLocalTrait<K, V, QueryMarkerWithKey> for &QueryScope<K, V>
 where
     K: 'static,
     V: 'static,
@@ -276,10 +318,10 @@ where
     }
 
     fn cache_key(&self) -> TypeId {
-        self.query_type_id
+        self.cache_key
     }
 
-    fn query(&self, key: K) -> impl Future<Output = V> + '_ {
+    fn query(&self, key: K) -> impl Future<Output = V> + 'static {
         (self.query)(key)
     }
 
@@ -308,7 +350,7 @@ pub(crate) struct QueryTypeInfo {
 
 impl QueryTypeInfo {
     #[track_caller]
-    pub fn new<K, V>(query_scope: &impl QueryScopeTrait<K, V>) -> Self
+    pub fn new<K, V, M>(query_scope: &impl QueryScopeTrait<K, V, M>) -> Self
     where
         K: 'static,
         V: 'static,
@@ -324,7 +366,7 @@ impl QueryTypeInfo {
         }
     }
 
-    pub fn new_local<K, V>(query_scope: &impl QueryScopeLocalTrait<K, V>) -> Self
+    pub fn new_local<K, V, M>(query_scope: &impl QueryScopeLocalTrait<K, V, M>) -> Self
     where
         K: 'static,
         V: 'static,

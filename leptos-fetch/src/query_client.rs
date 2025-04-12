@@ -161,9 +161,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn local_resource<K, V>(
+    pub fn local_resource<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V> + 'static,
+        query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
         keyer: impl Fn() -> K + 'static,
     ) -> LocalResource<V>
     where
@@ -245,9 +245,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_local_resource<K, V>(
+    pub fn arc_local_resource<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V> + 'static,
+        query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
         keyer: impl Fn() -> K + 'static,
     ) -> ArcLocalResource<V>
     where
@@ -268,9 +268,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn resource<K, V>(
+    pub fn resource<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
+        query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Resource<V, Codec>
     where
@@ -295,9 +295,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn resource_blocking<K, V>(
+    pub fn resource_blocking<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
+        query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Resource<V, Codec>
     where
@@ -322,9 +322,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_resource<K, V>(
+    pub fn arc_resource<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
+        query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcResource<V, Codec>
     where
@@ -348,9 +348,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_resource_blocking<K, V>(
+    pub fn arc_resource_blocking<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
+        query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcResource<V, Codec>
     where
@@ -367,9 +367,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[track_caller]
-    fn arc_resource_with_options<K, V>(
+    fn arc_resource_with_options<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V> + Send + Sync + 'static,
+        query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
         keyer: impl Fn() -> K + Send + Sync + 'static,
         blocking: bool,
     ) -> ArcResource<V, Codec>
@@ -561,9 +561,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If the cached query changes, active resources using the query will be updated.
     #[track_caller]
-    pub async fn prefetch_query<K, V>(
+    pub async fn prefetch_query<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         key: impl Borrow<K>,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
@@ -585,9 +585,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If the cached query changes, active resources using the query will be updated.
     #[track_caller]
-    pub async fn prefetch_query_local<K, V>(
+    pub async fn prefetch_query_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
@@ -650,9 +650,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the up-to-date cached query.
     #[track_caller]
-    pub async fn fetch_query<K, V>(
+    pub async fn fetch_query<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         key: impl Borrow<K>,
     ) -> V
     where
@@ -678,9 +678,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the up-to-date cached query.
     #[track_caller]
-    pub async fn fetch_query_local<K, V>(
+    pub async fn fetch_query_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) -> V
     where
@@ -745,9 +745,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Active resources using the query will be updated.
     #[track_caller]
-    pub fn set_query<K, V>(
+    pub fn set_query<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         key: impl Borrow<K>,
         new_value: V,
     ) where
@@ -766,9 +766,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Active resources using the query will be updated.
     #[track_caller]
-    pub fn set_query_local<K, V>(
+    pub fn set_query_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
         new_value: V,
     ) where
@@ -844,9 +844,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the output of the callback.
     #[track_caller]
-    pub fn update_query<K, V, T>(
+    pub fn update_query<K, V, T, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
         modifier: impl FnOnce(Option<&mut V>) -> T,
     ) -> T
@@ -895,6 +895,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         }
     }
 
+    /// TODO might want to rename update_query_async
     /// Asynchronously map a threadsafe query in the cache from one value to another.
     ///
     /// Unlike [`QueryClient::update_query`], this will fetch the query first, if it doesn't exist.
@@ -903,9 +904,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the output of the callback.
     #[track_caller]
-    pub async fn map_query<'a, K, V, T>(
+    pub async fn map_query<'a, K, V, T, M>(
         &'a self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         key: impl Borrow<K>,
         mapper: impl AsyncFnOnce(&mut V) -> T,
     ) -> T
@@ -931,9 +932,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the output of the callback.
     #[track_caller]
-    pub async fn map_query_local<'a, K, V, T>(
+    pub async fn map_query_local<'a, K, V, T, M>(
         &'a self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
         mapper: impl AsyncFnOnce(&mut V) -> T,
     ) -> T
@@ -994,9 +995,9 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     /// Synchronously get a query from the cache, if it exists.
     #[track_caller]
-    pub fn get_cached_query<K, V>(
+    pub fn get_cached_query<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) -> Option<V>
     where
@@ -1017,9 +1018,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns `true` if the query exists.
     #[track_caller]
-    pub fn query_exists<K, V>(
+    pub fn query_exists<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) -> bool
     where
@@ -1044,9 +1045,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading<K, V>(
+    pub fn subscribe_is_loading<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
@@ -1067,9 +1068,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_local<K, V>(
+    pub fn subscribe_is_loading_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> Signal<bool>
     where
@@ -1091,9 +1092,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_arc_local<K, V>(
+    pub fn subscribe_is_loading_arc_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
@@ -1120,9 +1121,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_arc<K, V>(
+    pub fn subscribe_is_loading_arc<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
@@ -1148,9 +1149,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching<K, V>(
+    pub fn subscribe_is_fetching<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<bool>
     where
@@ -1171,9 +1172,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_local<K, V>(
+    pub fn subscribe_is_fetching_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> Signal<bool>
     where
@@ -1195,9 +1196,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_arc_local<K, V>(
+    pub fn subscribe_is_fetching_arc_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<bool>
     where
@@ -1224,9 +1225,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_arc<K, V>(
+    pub fn subscribe_is_fetching_arc<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
@@ -1249,9 +1250,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.       
     #[track_caller]
-    pub fn subscribe_value<K, V>(
+    pub fn subscribe_value<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> Signal<Option<V>>
     where
@@ -1269,9 +1270,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_local<K, V>(
+    pub fn subscribe_value_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> Signal<Option<V>, LocalStorage>
     where
@@ -1319,9 +1320,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_arc_local<K, V>(
+    pub fn subscribe_value_arc_local<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> K + 'static,
     ) -> ArcSignal<Option<V>, LocalStorage>
     where
@@ -1339,9 +1340,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_arc<K, V>(
+    pub fn subscribe_value_arc<K, V, M>(
         &self,
-        query_scope: impl QueryScopeTrait<K, V>,
+        query_scope: impl QueryScopeTrait<K, V, M>,
         keyer: impl Fn() -> K + Send + Sync + 'static,
     ) -> ArcSignal<Option<V>>
     where
@@ -1383,9 +1384,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
-    pub fn invalidate_query<K, V>(
+    pub fn invalidate_query<K, V, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) -> bool
     where
@@ -1400,9 +1401,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
-    pub fn invalidate_queries<K, V, KRef>(
+    pub fn invalidate_queries<K, V, KRef, M>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V>,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keys: impl IntoIterator<Item = KRef>,
     ) -> Vec<KRef>
     where
@@ -1443,7 +1444,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Any active resources will refetch in the background, replacing them when ready.
     #[track_caller]
-    pub fn invalidate_query_type<K, V>(&self, query_scope: impl QueryScopeLocalTrait<K, V>)
+    pub fn invalidate_query_type<K, V, M>(&self, query_scope: impl QueryScopeLocalTrait<K, V, M>)
     where
         K: Hash + 'static,
         V: Clone + 'static,

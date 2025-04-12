@@ -1,9 +1,9 @@
 use leptos::{either::Either, prelude::*};
-use leptos_fetch::{QueryClient, QueryOptions, QueryScope};
+use leptos_fetch::QueryClient;
 use server_fn::ServerFnError;
 
 use crate::blog_api::{
-    delete_blogpost, get_blogpost_full, list_blogposts, AddBlogpost, BlogPost, BlogPostFull,
+    delete_blogpost, get_blogpost_full, list_blogposts, AddBlogpost, BlogPostFull,
 };
 
 #[component]
@@ -12,12 +12,7 @@ pub fn BlogList() -> impl IntoView {
 
     let client = expect_context::<QueryClient>();
 
-    // TODO should have traits work with functions that don't take an argument:
-    fn list_blogposts_query_scope() -> QueryScope<(), Result<Vec<BlogPost>, ServerFnError>> {
-        QueryScope::new(|_| list_blogposts(), QueryOptions::default()).set_title("list_blogposts")
-    }
-
-    let bloglist = client.resource(list_blogposts_query_scope(), move || ());
+    let bloglist = client.resource(list_blogposts, move || ());
 
     // TODO would really like a cleaner way of having optional resources than being forced into creating an outer component.
     async fn get_blogpost(id: Option<u16>) -> Result<Option<BlogPostFull>, ServerFnError> {
@@ -62,7 +57,7 @@ pub fn BlogList() -> impl IntoView {
                                                     if active_blogpost_id.get_untracked() == Some(id) {
                                                         active_blogpost_id.set(None);
                                                     }
-                                                    client.invalidate_query_type(list_blogposts_query_scope());
+                                                    client.invalidate_query_type(list_blogposts);
                                                 })
                                             }
                                         >
@@ -79,7 +74,7 @@ pub fn BlogList() -> impl IntoView {
                                                     }
                                                     client
                                                         .update_query(
-                                                            list_blogposts_query_scope(),
+                                                            list_blogposts,
                                                             (),
                                                             |cached| {
                                                                 if let Some(Ok(blogposts)) = cached {

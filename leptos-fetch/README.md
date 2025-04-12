@@ -95,8 +95,13 @@ pub fn App() -> impl IntoView {
 Any async function can be used as a query:
 
 ```rust
-/// The query function.
+/// The query function
 async fn get_track(id: i32) -> String {
+    todo!()
+}
+
+/// If no key argument, treated as ()
+async fn get_theme() -> String {
     todo!()
 }
 ```
