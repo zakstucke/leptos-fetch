@@ -29,6 +29,7 @@ All notable changes to this project are documented in this file.
 - Subscription bugs ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
 
 ### Tests
+- Sped up CI with erase_components ([#17](https://github.com/zakstucke/leptos-fetch/pull/17))
 
 ---
 
