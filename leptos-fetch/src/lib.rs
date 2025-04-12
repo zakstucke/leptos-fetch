@@ -366,6 +366,60 @@ mod test {
             .await;
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn test_no_query_args() {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _guard, _owner) = prep_vari!(false);
+
+                async fn fn_no_arg() -> &'static str {
+                    "no_arg"
+                }
+
+                async fn fn_with_arg(arg: &'static str) -> &'static str {
+                    arg
+                }
+
+                assert_eq!(client.fetch_query(fn_no_arg, ()).await, "no_arg");
+                assert_eq!(
+                    client.fetch_query(fn_with_arg, "with_arg").await,
+                    "with_arg"
+                );
+
+                assert_eq!(
+                    client
+                        .fetch_query(QueryScope::new(fn_no_arg, Default::default()), ())
+                        .await,
+                    "no_arg"
+                );
+                assert_eq!(
+                    client
+                        .fetch_query(QueryScope::new(fn_with_arg, Default::default()), "with_arg")
+                        .await,
+                    "with_arg"
+                );
+
+                assert_eq!(
+                    client
+                        .fetch_query_local(QueryScopeLocal::new(fn_no_arg, Default::default()), ())
+                        .await,
+                    "no_arg"
+                );
+                assert_eq!(
+                    client
+                        .fetch_query_local(
+                            QueryScopeLocal::new(fn_with_arg, Default::default()),
+                            "with_arg"
+                        )
+                        .await,
+                    "with_arg"
+                );
+            })
+            .await;
+    }
+
     /// Local and non-local values should externally be seen as the same cache.
     /// On the same thread they should both use the cached value.
     /// On a different thread, locally cached values shouldn't panic, should just be treated like they don't exist.
@@ -517,21 +571,25 @@ mod test {
                 assert!(!client.query_exists(&fetcher, key));
                 client.set_query_local(&fetcher, key, 1);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(1));
-                assert!(client.update_query(&fetcher, key, |value| value
-                    .map(|v| {
-                        *v = 2;
-                        true
-                    })
-                    .unwrap_or(false)));
+                assert!(client.update_query(&fetcher, key, |value| {
+                    value
+                        .map(|v| {
+                            *v = 2;
+                            true
+                        })
+                        .unwrap_or(false)
+                }));
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
                 client.set_query(&fetcher, key, 3);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
-                assert!(client.update_query(&fetcher, key, |value| value
-                    .map(|v| {
-                        *v *= 2;
-                        true
-                    })
-                    .unwrap_or(false)));
+                assert!(client.update_query(&fetcher, key, |value| {
+                    value
+                        .map(|v| {
+                            *v *= 2;
+                            true
+                        })
+                        .unwrap_or(false)
+                }));
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(6));
                 assert!(client.query_exists(&fetcher, key));
 
