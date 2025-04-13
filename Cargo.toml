@@ -7,11 +7,11 @@ version = "0.3.1"
 repository = "https://github.com/zakstucke/leptos-fetch"
 license = "MIT"
 authors = ["Zak Stucke"]
-edition = "2021"
+edition = "2024"
 keywords = ["leptos"]
 description = "Async query manager for Leptos"
 readme = "./leptos-fetch/README.md"
-rust-version = "1.80"
+rust-version = "1.85"
 
 [workspace.dependencies]
 any_spawner = "0.2"

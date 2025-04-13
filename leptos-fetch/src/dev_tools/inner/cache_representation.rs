@@ -1,7 +1,7 @@
 use std::{
     any::TypeId,
     collections::HashMap,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use chrono::Utc;
@@ -9,11 +9,11 @@ use futures::FutureExt;
 use leptos::{prelude::*, task::spawn_local};
 
 use crate::{
+    QueryClient, QueryOptions,
     events::Event,
     maybe_local::MaybeLocal,
     subs_client::QueryCreatedInfo,
-    utils::{new_buster_id, DebugValue, KeyHash},
-    QueryClient, QueryOptions,
+    utils::{DebugValue, KeyHash, new_buster_id},
 };
 
 use super::{components::ColorOption, sort::SortConfig};

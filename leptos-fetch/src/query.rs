@@ -5,14 +5,14 @@ use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
+    QueryOptions,
     cache::ScopeLookup,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
     query_scope::QueryTypeInfo,
-    utils::{new_buster_id, KeyHash},
+    utils::{KeyHash, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
-    QueryOptions,
 };
 
 pub(crate) struct Query<K, V: 'static> {
