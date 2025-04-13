@@ -15,7 +15,8 @@ use crate::{
     QueryOptions,
 };
 
-pub(crate) struct Query<V: 'static> {
+pub(crate) struct Query<K, V: 'static> {
+    key: MaybeLocal<K>,
     value_maybe_stale: GcValue<V>,
     pub combined_options: QueryOptions,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -33,15 +34,10 @@ pub(crate) struct Query<V: 'static> {
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
     ))]
-    pub debug_key: crate::utils::DebugValue,
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
     pub events: crate::events::Events,
 }
 
-impl<V> Drop for Query<V> {
+impl<K, V> Drop for Query<K, V> {
     fn drop(&mut self) {
         self.scope_lookup
             .scope_subscriptions_mut()
@@ -63,7 +59,7 @@ impl<V> Drop for Query<V> {
 pub(crate) trait DynQuery {
     fn key_hash(&self) -> &KeyHash;
 
-    fn debug_key(&self) -> &crate::utils::DebugValue;
+    fn debug_key(&self) -> crate::utils::DebugValue;
 
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue;
 
@@ -87,19 +83,22 @@ pub(crate) trait DynQuery {
     all(debug_assertions, feature = "devtools"),
     feature = "devtools-always"
 ))]
-impl<V> DynQuery for Query<V>
+impl<K, V> DynQuery for Query<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
     fn key_hash(&self) -> &KeyHash {
         &self.key_hash
     }
 
-    fn debug_key(&self) -> &crate::utils::DebugValue {
-        &self.debug_key
+    fn debug_key(&self) -> crate::utils::DebugValue {
+        // SAFETY: should only be called from single threaded frontend (devtools)
+        crate::utils::DebugValue::new(self.key.value_may_panic())
     }
 
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue {
+        // SAFETY: should only be called from single threaded frontend (devtools)
         crate::utils::DebugValue::new(self.value_maybe_stale.value().value_may_panic())
     }
 
@@ -147,18 +146,19 @@ where
     }
 }
 
-impl<V> Debug for Query<V> {
+impl<K, V> Debug for Query<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Query").finish()
     }
 }
 
-impl<V> Query<V> {
+impl<K, V> Query<K, V> {
     pub fn new(
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
         query_type_info: &QueryTypeInfo,
         key_hash: KeyHash,
+        key: MaybeLocal<K>,
         value: MaybeLocal<V>,
         buster: ArcRwSignal<u64>,
         scope_options: Option<QueryOptions>,
@@ -167,14 +167,10 @@ impl<V> Query<V> {
             all(debug_assertions, feature = "devtools"),
             feature = "devtools-always"
         ))]
-        debug_key: crate::utils::DebugValue,
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
         event: crate::events::Event,
     ) -> Self
     where
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let cache_key = query_type_info.cache_key;
@@ -189,7 +185,7 @@ impl<V> Query<V> {
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
-                    scope_lookup.gc_query::<V>(&cache_key, &key_hash);
+                    scope_lookup.gc_query::<K, V>(&cache_key, &key_hash);
                     true
                 } else {
                     false
@@ -206,7 +202,7 @@ impl<V> Query<V> {
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
             let query_type_info = query_type_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
-                scope_lookup.with_cached_scope_mut::<V, _>(
+                scope_lookup.with_cached_scope_mut::<K, V, _>(
                     &query_type_info,
                     false,
                     |maybe_scope| {
@@ -238,12 +234,8 @@ impl<V> Query<V> {
                 all(debug_assertions, feature = "devtools"),
                 feature = "devtools-always"
             ))]
-            debug_key,
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
             events: crate::events::Events::new(&scope_lookup, cache_key, key_hash, vec![event]),
+            key,
             value_maybe_stale: GcValue::new(
                 value,
                 GcHandle::new(gc_cb.clone(), combined_options.gc_time()),
@@ -320,6 +312,10 @@ impl<V> Query<V> {
             let stale_after = self.updated_at + self.combined_options.stale_time();
             chrono::Utc::now() > stale_after
         }
+    }
+
+    pub fn key(&self) -> &MaybeLocal<K> {
+        &self.key
     }
 
     pub fn value_maybe_stale(&self) -> &MaybeLocal<V> {

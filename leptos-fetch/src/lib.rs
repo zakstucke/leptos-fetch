@@ -247,6 +247,7 @@ mod test {
     enum InvalidationType {
         Query,
         Scope,
+        Predicate,
         All,
     }
 
@@ -1209,6 +1210,7 @@ mod test {
         #[values(
             InvalidationType::Query,
             InvalidationType::Scope,
+            InvalidationType::Predicate,
             InvalidationType::All
         )]
         invalidation_type: InvalidationType,
@@ -1248,6 +1250,9 @@ mod test {
                                 }
                                 InvalidationType::Scope => {
                                     client.invalidate_query_type(fetcher.clone());
+                                }
+                                InvalidationType::Predicate => {
+                                    client.invalidate_queries_with_predicate(fetcher.clone(), |key| key == &2);
                                 }
                                 InvalidationType::All => {
                                     client.invalidate_all_queries();

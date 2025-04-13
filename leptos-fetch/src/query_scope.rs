@@ -56,6 +56,7 @@ macro_rules! define {
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
+            // TODO the cache_key should include a hash of the options and the title too
             cache_key: TypeId,
             options: QueryOptions,
             #[cfg(any(

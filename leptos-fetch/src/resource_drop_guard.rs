@@ -2,24 +2,29 @@ use std::{any::TypeId, sync::Arc};
 
 use parking_lot::Mutex;
 
-use crate::{cache::ScopeLookup, utils::KeyHash};
+use crate::{
+    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, utils::KeyHash,
+};
 
 #[derive(Clone)]
-pub struct ResourceDropGuard<V>(Arc<Mutex<ResourceDropGuardInner<V>>>)
+pub struct ResourceDropGuard<K, V>(Arc<Mutex<ResourceDropGuardInner<K, V>>>)
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: 'static;
 
-impl<V> ResourceDropGuard<V>
+impl<K, V> ResourceDropGuard<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
     pub fn new(scope_lookup: ScopeLookup, resource_id: u64, cache_key: TypeId) -> Self {
-        ResourceDropGuard(Arc::new(Mutex::new(ResourceDropGuardInner::<V> {
+        ResourceDropGuard(Arc::new(Mutex::new(ResourceDropGuardInner::<K, V> {
             scope_lookup,
             resource_id,
             active_key_hash: None,
             cache_key,
-            _phantom: std::marker::PhantomData,
+            _k: std::marker::PhantomData,
+            _v: std::marker::PhantomData,
         })))
     }
 
@@ -27,7 +32,7 @@ where
         let mut guard = self.0.lock();
         // If key changing, should mark the previous as dropped:
         if let Some(active_key_hash) = guard.active_key_hash {
-            guard.scope_lookup.mark_resource_dropped::<V>(
+            guard.scope_lookup.mark_resource_dropped::<K, V>(
                 &active_key_hash,
                 &guard.cache_key,
                 guard.resource_id,
@@ -37,24 +42,27 @@ where
     }
 }
 
-struct ResourceDropGuardInner<V>
+struct ResourceDropGuardInner<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
     scope_lookup: ScopeLookup,
     resource_id: u64,
     active_key_hash: Option<KeyHash>,
     cache_key: TypeId,
-    _phantom: std::marker::PhantomData<V>,
+    _k: std::marker::PhantomData<K>,
+    _v: std::marker::PhantomData<V>,
 }
 
-impl<V> Drop for ResourceDropGuardInner<V>
+impl<K, V> Drop for ResourceDropGuardInner<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
     fn drop(&mut self) {
         if let Some(active_key_hash) = self.active_key_hash.take() {
-            self.scope_lookup.mark_resource_dropped::<V>(
+            self.scope_lookup.mark_resource_dropped::<K, V>(
                 &active_key_hash,
                 &self.cache_key,
                 self.resource_id,
