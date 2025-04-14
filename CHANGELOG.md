@@ -18,6 +18,7 @@ All notable changes to this project are documented in this file.
     - `prefetch_local_query` -> `prefetch_query_local`
     - `fetch_local_query` -> `fetch_query_local`
     - `set_local_query` -> `set_query_local`
+- MSRV increased to `1.85` to migrate to edition 2024 and use async closures ([#19](https://github.com/zakstucke/leptos-fetch/pull/19))
 
 ### Added
 - For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. Customize with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
