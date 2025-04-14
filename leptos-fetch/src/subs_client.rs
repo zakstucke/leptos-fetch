@@ -1,15 +1,15 @@
 use std::{any::TypeId, collections::HashMap, sync::Arc};
 
 use futures::{
-    channel::mpsc::{UnboundedReceiver, UnboundedSender},
     StreamExt,
+    channel::mpsc::{UnboundedReceiver, UnboundedSender},
 };
 use parking_lot::Mutex;
 
 use crate::{
-    cache::ScopeLookup,
-    utils::{new_subscription_id, DebugValue, KeyHash},
     QueryOptions,
+    cache::ScopeLookup,
+    utils::{DebugValue, KeyHash, new_subscription_id},
 };
 
 // sub_id -> Sub

@@ -1,4 +1,4 @@
-use rustc_version::{version_meta, Channel};
+use rustc_version::{Channel, version_meta};
 
 // This build script sets the `cfg` flag `CHANNEL_STABLE`, `CHANNEL_BETA`, `CHANNEL_NIGHTLY` or `CHANNEL_DEV` depending on the release channel of the compiler being used.
 // https://stackoverflow.com/questions/61417452/how-to-get-a-feature-requirement-tag-in-the-documentation-generated-by-cargo-do

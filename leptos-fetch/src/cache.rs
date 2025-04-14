@@ -1,6 +1,6 @@
 use std::{
     any::{Any, TypeId},
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     future::Future,
     hash::Hash,
     sync::{Arc, LazyLock},
@@ -10,13 +10,13 @@ use std::{
 use leptos::prelude::ArcRwSignal;
 
 use crate::{
+    QueryOptions,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
     query_scope::QueryTypeInfo,
     subs_scope::ScopeSubs,
-    utils::{new_buster_id, new_scope_id, KeyHash, OnDrop},
-    QueryOptions,
+    utils::{KeyHash, OnDrop, new_buster_id, new_scope_id},
 };
 
 #[derive(Debug)]
@@ -521,14 +521,14 @@ impl ScopeLookup {
         }
     }
 
-    pub async fn cached_or_fetch<K, V, Fut, T>(
+    pub async fn cached_or_fetch<K, V, T>(
         &self,
         client_options: QueryOptions,
         scope_options: Option<QueryOptions>,
         maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
         query_type_info: &QueryTypeInfo,
         key: &K,
-        fetcher: impl FnOnce(K) -> Fut,
+        fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
@@ -536,7 +536,6 @@ impl ScopeLookup {
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
-        Fut: Future<Output = MaybeLocal<V>>,
     {
         let key_hash = KeyHash::new(key);
         let mut cached_buster = None;

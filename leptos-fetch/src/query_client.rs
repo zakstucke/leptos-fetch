@@ -1,12 +1,12 @@
 #![allow(ungated_async_fn_track_caller)] // Want it to auto-turn on when stable
 
-use std::{any::TypeId, borrow::Borrow, fmt::Debug, future::Future, hash::Hash, sync::Arc};
+use std::{any::TypeId, borrow::Borrow, fmt::Debug, hash::Hash, sync::Arc};
 
-use codee::{string::JsonSerdeCodec, Decoder, Encoder};
+use codee::{Decoder, Encoder, string::JsonSerdeCodec};
 use leptos::{
     prelude::{
-        provide_context, ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read,
-        ReadUntracked, Set, Signal, Track,
+        ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read, ReadUntracked, Set,
+        Signal, Track, provide_context,
     },
     server::{
         ArcLocalResource, ArcResource, FromEncodedStr, IntoEncodedString, LocalResource, Resource,
@@ -15,14 +15,14 @@ use leptos::{
 use send_wrapper::SendWrapper;
 
 use crate::{
+    QueryOptions,
     cache::{CachedOrFetchCbInputVariant, CachedOrFetchCbOutput},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
     query_scope::{QueryScopeLocalTrait, QueryScopeTrait, QueryTypeInfo},
     resource_drop_guard::ResourceDropGuard,
-    utils::{new_buster_id, new_resource_id, KeyHash},
-    QueryOptions,
+    utils::{KeyHash, new_buster_id, new_resource_id},
 };
 
 use super::cache::ScopeLookup;
@@ -606,16 +606,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[track_caller]
-    async fn prefetch_inner<K, V, Fut>(
+    async fn prefetch_inner<K, V>(
         &self,
         query_type_info: QueryTypeInfo,
-        fetcher: impl FnOnce(K) -> Fut,
+        fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         key: &K,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
-        Fut: Future<Output = MaybeLocal<V>>,
     {
         self.scope_lookup
             .cached_or_fetch(
@@ -705,10 +704,10 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[track_caller]
-    async fn fetch_inner<K, V, Fut>(
+    async fn fetch_inner<K, V>(
         &self,
         query_type_info: QueryTypeInfo,
-        fetcher: impl FnOnce(K) -> Fut,
+        fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         key: &K,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
@@ -716,7 +715,6 @@ impl<Codec: 'static> QueryClient<Codec> {
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
-        Fut: Future<Output = MaybeLocal<V>>,
     {
         self.scope_lookup
             .cached_or_fetch(
@@ -968,10 +966,10 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[track_caller]
-    async fn map_query_inner<'a, K, V, FetcherFut, T>(
+    async fn map_query_inner<'a, K, V, T>(
         &'a self,
         query_type_info: QueryTypeInfo,
-        fetcher: impl FnOnce(K) -> FetcherFut,
+        fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         key: &K,
         mapper: impl AsyncFnOnce(&mut V) -> T,
         into_maybe_local: impl FnOnce(V) -> MaybeLocal<V>,
@@ -980,7 +978,6 @@ impl<Codec: 'static> QueryClient<Codec> {
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
-        FetcherFut: Future<Output = MaybeLocal<V>>,
     {
         let key_hash = KeyHash::new(key.borrow());
 

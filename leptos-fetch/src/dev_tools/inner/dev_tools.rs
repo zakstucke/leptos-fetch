@@ -5,15 +5,15 @@ use chrono::{TimeDelta, Utc};
 use leptos::{portal::Portal, prelude::*};
 
 use super::{
-    cache_representation::{prepare, CacheRep, QueryRep, QueryState},
+    cache_representation::{CacheRep, QueryRep, QueryState, prepare},
     components::*,
     sort::SortConfig,
-    sort::{filter_s, SortOption},
+    sort::{SortOption, filter_s},
 };
 
 use crate::{
-    utils::{new_buster_id, KeyHash},
     QueryClient,
+    utils::{KeyHash, new_buster_id},
 };
 
 const TIME_FORMAT: &str = "%H:%M:%S.%3f"; // %3f will give millisecond accuracy
@@ -138,8 +138,8 @@ pub(crate) fn DevtoolsInner(client: QueryClient) -> impl IntoView {
 
     // Drag start handler
     let handle_drag_start = move |event: web_sys::MouseEvent| {
-        use leptos::wasm_bindgen::closure::Closure;
         use leptos::wasm_bindgen::JsCast;
+        use leptos::wasm_bindgen::closure::Closure;
 
         let bounding = container_ref
             .get()
