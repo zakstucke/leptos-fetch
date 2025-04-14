@@ -20,17 +20,18 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) struct Scope<V: 'static> {
-    threadsafe_cache: HashMap<KeyHash, Query<V>>,
-    local_caches: HashMap<ThreadId, HashMap<KeyHash, Query<V>>>,
+pub(crate) struct Scope<K: 'static, V: 'static> {
+    threadsafe_cache: HashMap<KeyHash, Query<K, V>>,
+    local_caches: HashMap<ThreadId, HashMap<KeyHash, Query<K, V>>>,
     // To make sure parallel fetches for the same key aren't happening across different resources.
     fetcher_mutexes: HashMap<KeyHash, Arc<futures::lock::Mutex<()>>>,
     scope_lookup: ScopeLookup,
     query_type_info: QueryTypeInfo,
 }
 
-impl<V> Scope<V>
+impl<K, V> Scope<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
     fn new(scope_lookup: ScopeLookup, query_type_info: QueryTypeInfo) -> Self {
@@ -44,7 +45,7 @@ where
     }
 
     // TODO should think about the wrong-thread exposure on some of these.
-    fn all_queries(&self) -> impl Iterator<Item = &Query<V>> {
+    fn all_queries(&self) -> impl Iterator<Item = &Query<K, V>> {
         self.threadsafe_cache.values().chain(
             self.local_caches
                 .values()
@@ -52,7 +53,7 @@ where
         )
     }
 
-    fn all_queries_mut(&mut self) -> impl Iterator<Item = &mut Query<V>> {
+    pub(crate) fn all_queries_mut(&mut self) -> impl Iterator<Item = &mut Query<K, V>> {
         self.threadsafe_cache.values_mut().chain(
             self.local_caches
                 .values_mut()
@@ -60,7 +61,7 @@ where
         )
     }
 
-    fn insert_without_query_created_notif(&mut self, key_hash: KeyHash, query: Query<V>) {
+    fn insert_without_query_created_notif(&mut self, key_hash: KeyHash, query: Query<K, V>) {
         if query.value_maybe_stale().is_local() {
             self.local_caches
                 .entry(std::thread::current().id())
@@ -74,7 +75,7 @@ where
             .notify_value_set_updated_or_removed::<V>(self.query_type_info.cache_key, key_hash);
     }
 
-    pub fn insert(&mut self, key_hash: KeyHash, query: Query<V>) {
+    pub fn insert(&mut self, key_hash: KeyHash, query: Query<K, V>) {
         #[cfg(any(
             all(debug_assertions, feature = "devtools"),
             feature = "devtools-always"
@@ -84,8 +85,9 @@ where
                 cache_key: self.query_type_info.cache_key,
                 scope_title: self.query_type_info.title.clone(),
                 key_hash,
+                // SAFETY: query just created, so same thread
+                debug_key: crate::utils::DebugValue::new(query.key().value_may_panic()),
                 v_type_id: TypeId::of::<V>(),
-                debug_key: query.debug_key.clone(),
                 combined_options: query.combined_options,
             };
             self.insert_without_query_created_notif(key_hash, query);
@@ -102,7 +104,7 @@ where
         }
     }
 
-    pub fn get(&self, key_hash: &KeyHash) -> Option<&Query<V>> {
+    pub fn get(&self, key_hash: &KeyHash) -> Option<&Query<K, V>> {
         // Threadsafe always takes priority:
         self.threadsafe_cache.get(key_hash).or_else(|| {
             self.local_caches
@@ -111,7 +113,7 @@ where
         })
     }
 
-    pub fn get_mut(&mut self, key_hash: &KeyHash) -> Option<&mut Query<V>> {
+    pub fn get_mut(&mut self, key_hash: &KeyHash) -> Option<&mut Query<K, V>> {
         // Threadsafe always takes priority:
         self.threadsafe_cache.get_mut(key_hash).or_else(|| {
             self.local_caches
@@ -121,14 +123,14 @@ where
     }
 
     /// Should use this and the threadsafe one if updating the value, have to be separated.
-    pub fn get_mut_local_only(&mut self, key_hash: &KeyHash) -> Option<&mut Query<V>> {
+    pub fn get_mut_local_only(&mut self, key_hash: &KeyHash) -> Option<&mut Query<K, V>> {
         self.local_caches
             .get_mut(&std::thread::current().id())
             .and_then(|local_cache| local_cache.get_mut(key_hash))
     }
 
     /// Should use this and the threadsafe one if updating the value, have to be separated.
-    pub fn get_mut_threadsafe_only(&mut self, key_hash: &KeyHash) -> Option<&mut Query<V>> {
+    pub fn get_mut_threadsafe_only(&mut self, key_hash: &KeyHash) -> Option<&mut Query<K, V>> {
         self.threadsafe_cache.get_mut(key_hash)
     }
 
@@ -142,7 +144,7 @@ where
         }
     }
 
-    pub fn remove_entry(&mut self, key_hash: &KeyHash) -> Option<(KeyHash, Query<V>)> {
+    pub fn remove_entry(&mut self, key_hash: &KeyHash) -> Option<(KeyHash, Query<K, V>)> {
         let result = if let Some(query) = self.threadsafe_cache.remove_entry(key_hash) {
             // Threadsafe always takes priority:
             Some(query)
@@ -166,8 +168,9 @@ pub(crate) trait Busters: 'static {
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
 
-impl<V> Busters for Scope<V>
+impl<K, V> Busters for Scope<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
     fn invalidate_scope(&mut self) {
@@ -211,8 +214,9 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
     fn size(&self) -> usize;
 }
 
-impl<V> ScopeTrait for Scope<V>
+impl<K, V> ScopeTrait for Scope<K, V>
 where
+    K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + Clone + 'static,
 {
     fn as_any(&self) -> &dyn Any {
@@ -400,14 +404,19 @@ impl ScopeLookup {
         )
     }
 
-    pub fn mark_resource_dropped<V>(&self, key_hash: &KeyHash, cache_key: &TypeId, resource_id: u64)
-    where
+    pub fn mark_resource_dropped<K, V>(
+        &self,
+        key_hash: &KeyHash,
+        cache_key: &TypeId,
+        resource_id: u64,
+    ) where
+        K: DebugIfDevtoolsEnabled + 'static,
         V: 'static,
     {
         if let Some(query) = self.scopes().get(cache_key).and_then(|scope_cache| {
             scope_cache
                 .as_any()
-                .downcast_ref::<Scope<V>>()
+                .downcast_ref::<Scope<K, V>>()
                 .expect("Cache entry type mismatch.")
                 .get(key_hash)
         }) {
@@ -415,19 +424,20 @@ impl ScopeLookup {
         }
     }
 
-    pub fn fetcher_mutex<V>(
+    pub fn fetcher_mutex<K, V>(
         &self,
         key_hash: KeyHash,
         query_type_info: &QueryTypeInfo,
     ) -> Arc<futures::lock::Mutex<()>>
     where
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scopes_mut()
             .entry(query_type_info.cache_key)
-            .or_insert_with(|| Box::new(Scope::<V>::new(*self, query_type_info.clone())))
+            .or_insert_with(|| Box::new(Scope::<K, V>::new(*self, query_type_info.clone())))
             .as_any_mut()
-            .downcast_mut::<Scope<V>>()
+            .downcast_mut::<Scope<K, V>>()
             .expect("Cache entry type mismatch.")
             .fetcher_mutexes
             .entry(key_hash)
@@ -435,33 +445,35 @@ impl ScopeLookup {
             .clone()
     }
 
-    pub fn with_cached_query<V, T>(
+    pub fn with_cached_query<K, V, T>(
         &self,
         key_hash: &KeyHash,
         cache_key: &TypeId,
-        cb: impl FnOnce(Option<&Query<V>>) -> T,
+        cb: impl FnOnce(Option<&Query<K, V>>) -> T,
     ) -> T
     where
+        K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let guard = self.scopes();
         let maybe_query = guard.get(cache_key).and_then(|scope_cache| {
             scope_cache
                 .as_any()
-                .downcast_ref::<Scope<V>>()
+                .downcast_ref::<Scope<K, V>>()
                 .expect("Cache entry type mismatch.")
                 .get(key_hash)
         });
         cb(maybe_query)
     }
 
-    pub fn with_cached_scope_mut<V, T>(
+    pub fn with_cached_scope_mut<K, V, T>(
         &self,
         query_type_info: &QueryTypeInfo,
         create_scope_if_missing: bool,
-        cb: impl FnOnce(Option<&mut Scope<V>>) -> T,
+        cb: impl FnOnce(Option<&mut Scope<K, V>>) -> T,
     ) -> T
     where
+        K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let mut guard = self.scopes_mut();
@@ -469,7 +481,7 @@ impl ScopeLookup {
             Entry::Occupied(entry) => Some(entry.into_mut()),
             Entry::Vacant(entry) => {
                 if create_scope_if_missing {
-                    Some(entry.insert(Box::new(Scope::<V>::new(*self, query_type_info.clone()))))
+                    Some(entry.insert(Box::new(Scope::<K, V>::new(*self, query_type_info.clone()))))
                 } else {
                     None
                 }
@@ -480,7 +492,7 @@ impl ScopeLookup {
             cb(Some(
                 scope
                     .as_any_mut()
-                    .downcast_mut::<Scope<V>>()
+                    .downcast_mut::<Scope<K, V>>()
                     .expect("Cache entry type mismatch."),
             ))
         } else {
@@ -488,15 +500,16 @@ impl ScopeLookup {
         }
     }
 
-    pub fn gc_query<V>(&self, cache_key: &TypeId, key_hash: &KeyHash)
+    pub fn gc_query<K, V>(&self, cache_key: &TypeId, key_hash: &KeyHash)
     where
+        K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let mut guard = self.scopes_mut();
         let remove_scope = if let Some(scope) = guard.get_mut(cache_key) {
             let scope = scope
                 .as_any_mut()
-                .downcast_mut::<Scope<V>>()
+                .downcast_mut::<Scope<K, V>>()
                 .expect("Cache entry type mismatch.");
             scope.remove_entry(key_hash);
             scope.is_empty()
@@ -516,8 +529,9 @@ impl ScopeLookup {
         query_type_info: &QueryTypeInfo,
         key: &K,
         fetcher: impl FnOnce(K) -> Fut,
-        return_cb: impl Fn(CachedOrFetchCbInput<V>) -> CachedOrFetchCbOutput<T>,
+        return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
+        lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
@@ -526,8 +540,10 @@ impl ScopeLookup {
     {
         let key_hash = KeyHash::new(key);
         let mut cached_buster = None;
-        let next_directive =
-            self.with_cached_query::<V, _>(&key_hash, &query_type_info.cache_key, |maybe_cached| {
+        let next_directive = self.with_cached_query::<K, V, _>(
+            &key_hash,
+            &query_type_info.cache_key,
+            |maybe_cached| {
                 if let Some(cached) = maybe_cached {
                     cached_buster = Some(cached.buster.clone());
                     return_cb(CachedOrFetchCbInput {
@@ -537,13 +553,14 @@ impl ScopeLookup {
                 } else {
                     CachedOrFetchCbOutput::Refetch
                 }
-            });
+            },
+        );
 
         match next_directive {
             CachedOrFetchCbOutput::Return(value) => value,
             CachedOrFetchCbOutput::Refetch => {
                 // Will probably need to fetch, unless someone fetches whilst trying to get hold of the fetch mutex:
-                let fetcher_mutex = self.fetcher_mutex::<V>(key_hash, query_type_info);
+                let fetcher_mutex = self.fetcher_mutex::<K, V>(key_hash, query_type_info);
                 let _maybe_fetcher_mutex_guard_local = if maybe_preheld_fetcher_mutex_guard
                     .is_none()
                 {
@@ -552,7 +569,7 @@ impl ScopeLookup {
                         None => {
                             // If have to wait, should check cache again in case it was fetched while waiting.
                             let fetcher_guard = fetcher_mutex.lock().await;
-                            let next_directive = self.with_cached_query::<V, _>(
+                            let next_directive = self.with_cached_query::<K, V, _>(
                                 &key_hash,
                                 &query_type_info.cache_key,
                                 |maybe_cached| {
@@ -637,7 +654,7 @@ impl ScopeLookup {
                 };
 
                 let next_directive =
-                    self.with_cached_scope_mut::<_, _>(query_type_info, true, |scope| {
+                    self.with_cached_scope_mut::<_, _, _>(query_type_info, true, |scope| {
                         let scope = scope.expect("provided a default");
                         if let Some(cached) = scope.get_mut(&key_hash) {
                             cached.set_value(
@@ -663,16 +680,12 @@ impl ScopeLookup {
                                     *self,
                                     query_type_info,
                                     key_hash,
+                                    lazy_maybe_local_key(),
                                     new_value,
                                     buster_if_uncached
                                         .expect("loading_first_time means this is Some(). (bug)"),
                                     scope_options,
                                     None,
-                                    #[cfg(any(
-                                        all(debug_assertions, feature = "devtools"),
-                                        feature = "devtools-always"
-                                    ))]
-                                    crate::utils::DebugValue::new(key),
                                     #[cfg(any(
                                         all(debug_assertions, feature = "devtools"),
                                         feature = "devtools-always"
@@ -700,8 +713,8 @@ impl ScopeLookup {
     }
 }
 
-pub(crate) struct CachedOrFetchCbInput<'a, V: 'static> {
-    pub cached: &'a Query<V>,
+pub(crate) struct CachedOrFetchCbInput<'a, K: 'static, V: 'static> {
+    pub cached: &'a Query<K, V>,
     pub variant: CachedOrFetchCbInputVariant,
 }
 

@@ -25,6 +25,7 @@ All notable changes to this project are documented in this file.
 - Added `subscribe_value()`, `subscribe_value_local()`, `subscribe_value_arc()`, `subscribe_value_arc_local()` methods to the `QueryClient` returning `Signal<Option<V>>` for subscribing to query values without preventing their garbage collection or triggering fetching ([#13](https://github.com/zakstucke/leptos-fetch/pull/13))
 - [`QueryClient::map_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query) added to make async updates to queries seamlessly, making patterns such as infinite queries simpler. Pagination and infinite query examples added to readme. ([#14](https://github.com/zakstucke/leptos-fetch/pull/14))
 - Query functions can be supplied with no key parameter/argument, will default to `()`, prevents needing to add a wrapping function to external fns that don't need an argument. ([#16](https://github.com/zakstucke/leptos-fetch/pull/16))
+- [`QueryClient::invalidate_queries_with_predicate`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_queries_with_predicate) to invalidate a subset of queries in a scope without knowing the key ahead of time. ([#18](https://github.com/zakstucke/leptos-fetch/pull/18))
 
 ### Fixed
 - Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
