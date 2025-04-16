@@ -212,13 +212,13 @@ use leptos::prelude::*;
 
 // A QueryScope/QueryScopeLocal can be used just like the function directly in QueryClient methods.
 fn track_query() -> QueryScope<i32, String> {
-    QueryScope::new(
-        get_track, 
-        QueryOptions::new()
-            .set_stale_time(Duration::from_secs(10))
-            .set_gc_time(Duration::from_secs(60))
-            .set_refetch_interval(Duration::from_secs(10))
-    )
+    QueryScope::new(get_track)
+        .set_options(
+            QueryOptions::new()
+                .set_stale_time(Duration::from_secs(10))
+                .set_gc_time(Duration::from_secs(60))
+                .set_refetch_interval(Duration::from_secs(10))
+        )
 }
 
 /// The query function.

@@ -11,6 +11,7 @@ use crate::{
     maybe_local::MaybeLocal,
     options_combine,
     query_scope::QueryTypeInfo,
+    safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
 };
@@ -123,7 +124,7 @@ where
         if self.stale() {
             None
         } else {
-            let stale_after = self.updated_at + self.combined_options.stale_time();
+            let stale_after = safe_dt_dur_add(self.updated_at, self.combined_options.stale_time());
             let now = chrono::Utc::now();
             let till_stale = stale_after - now;
             if till_stale < chrono::TimeDelta::zero() {
@@ -309,8 +310,8 @@ impl<K, V> Query<K, V> {
         if self.invalidated {
             true
         } else {
-            let stale_after = self.updated_at + self.combined_options.stale_time();
-            chrono::Utc::now() > stale_after
+            chrono::Utc::now()
+                > safe_dt_dur_add(self.updated_at, self.combined_options.stale_time())
         }
     }
 

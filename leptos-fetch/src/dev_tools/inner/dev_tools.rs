@@ -12,7 +12,7 @@ use super::{
 };
 
 use crate::{
-    QueryClient,
+    QueryClient, safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
 };
 
@@ -908,7 +908,7 @@ fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
             )
         };
 
-        let stale_in = (updated_at + opts.stale_time()) - chrono::Utc::now();
+        let stale_in = safe_dt_dur_add(updated_at, opts.stale_time()) - chrono::Utc::now();
         if stale_in > TimeDelta::zero() && stale_in < TimeDelta::days(1) {
             stale_in_str.set(format!(" ({})", format_td(stale_in)));
         } else {
@@ -916,7 +916,7 @@ fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
         }
 
         if query.active_resources.get() == 0 {
-            let gc_in = (updated_at + opts.gc_time()) - chrono::Utc::now();
+            let gc_in = safe_dt_dur_add(updated_at, opts.gc_time()) - chrono::Utc::now();
             if gc_in > TimeDelta::zero() && gc_in < TimeDelta::days(1) {
                 gc_in_str.set(format!(" ({})", format_td(gc_in)));
             } else {
@@ -927,7 +927,7 @@ fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
         }
 
         if let Some(refetch_interval) = opts.refetch_interval() {
-            let refetch_in = (updated_at + refetch_interval) - chrono::Utc::now();
+            let refetch_in = safe_dt_dur_add(updated_at, refetch_interval) - chrono::Utc::now();
             if refetch_in > TimeDelta::zero() && refetch_in < TimeDelta::days(1) {
                 refetch_in_str.set(format!(" ({})", format_td(refetch_in)));
             } else {
