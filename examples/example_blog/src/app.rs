@@ -1,5 +1,7 @@
+use std::time::Duration;
+
 use leptos::prelude::*;
-use leptos_fetch::{QueryClient, QueryDevtools};
+use leptos_fetch::{QueryClient, QueryDevtools, QueryOptions};
 
 use crate::blog_list::BlogList;
 
@@ -24,7 +26,9 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 
 #[component]
 pub fn App() -> impl IntoView {
-    let client = QueryClient::new().provide();
+    let client = QueryClient::new()
+        .set_options(QueryOptions::default().set_stale_time(Duration::from_secs(10)))
+        .provide();
 
     view! {
         <QueryDevtools client=client />

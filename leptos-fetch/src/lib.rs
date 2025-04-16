@@ -291,10 +291,7 @@ mod test {
                 }
             }
         };
-        (
-            QueryScope::new(fetcher_src, QueryOptions::new()),
-            fetch_calls,
-        )
+        (QueryScope::new(fetcher_src), fetch_calls)
     }
 
     fn identify_parking_lot_deadlocks() {
@@ -392,30 +389,25 @@ mod test {
                 );
 
                 assert_eq!(
-                    client
-                        .fetch_query(QueryScope::new(fn_no_arg, Default::default()), ())
-                        .await,
+                    client.fetch_query(QueryScope::new(fn_no_arg), ()).await,
                     "no_arg"
                 );
                 assert_eq!(
                     client
-                        .fetch_query(QueryScope::new(fn_with_arg, Default::default()), "with_arg")
+                        .fetch_query(QueryScope::new(fn_with_arg), "with_arg")
                         .await,
                     "with_arg"
                 );
 
                 assert_eq!(
                     client
-                        .fetch_query_local(QueryScopeLocal::new(fn_no_arg, Default::default()), ())
+                        .fetch_query_local(QueryScopeLocal::new(fn_no_arg), ())
                         .await,
                     "no_arg"
                 );
                 assert_eq!(
                     client
-                        .fetch_query_local(
-                            QueryScopeLocal::new(fn_with_arg, Default::default()),
-                            "with_arg"
-                        )
+                        .fetch_query_local(QueryScopeLocal::new(fn_with_arg), "with_arg")
                         .await,
                     "with_arg"
                 );
@@ -470,13 +462,10 @@ mod test {
                 assert_eq!(client.get_cached_query(&fetcher_2, 2), Some(3));
 
                 // But a new closure should be seen as a new cache:
-                let fetcher = QueryScope::new(
-                    move |key| {
-                        let fetcher = fetcher.clone();
-                        async move { query_scope::QueryScopeTrait::query(&fetcher, key).await }
-                    },
-                    QueryOptions::new(),
-                );
+                let fetcher = QueryScope::new(move |key| {
+                    let fetcher = fetcher.clone();
+                    async move { query_scope::QueryScopeTrait::query(&fetcher, key).await }
+                });
                 assert_eq!(client.get_cached_query(&fetcher, 2), None);
             })
             .await;
@@ -693,9 +682,8 @@ mod test {
                     }
                 };
                 let fetcher = QueryScope::new(
-                    fetcher,
-                    QueryOptions::new().set_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)),
-                );
+                    fetcher
+                ).set_options(QueryOptions::new().set_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)));
 
                 let (client, _guard, owner) = prep_vari!(false);
 
@@ -800,9 +788,8 @@ mod test {
                     }
                 };
                 let fetcher = QueryScope::new(
-                    fetcher,
-                    QueryOptions::new().set_gc_time(std::time::Duration::from_millis(GC_TIME_MS)),
-                );
+                    fetcher
+                ).set_options(QueryOptions::new().set_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
 
                 let (client, _guard, owner) = prep_vari!(false);
 
@@ -931,7 +918,7 @@ mod test {
                         }
                     }
                 };
-                let fetcher = QueryScopeLocal::new(fetcher, Default::default());
+                let fetcher = QueryScopeLocal::new(fetcher);
 
                 let (client, _guard, _owner) = prep_vari!(false);
 
@@ -1509,7 +1496,7 @@ mod test {
                             }
                         }
                     };
-                    let fetcher = QueryScope::new(fetcher, Default::default());
+                    let fetcher = QueryScope::new(fetcher);
 
                     let keyer = || 1;
 

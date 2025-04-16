@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-// TODO change stale time to never by default, would be less surprising.
-pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::MAX; // Never
 pub(crate) const DEFAULT_GC_TIME: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Configuration to be used with [`crate::QueryClient`] and individual query types.

@@ -9,6 +9,18 @@ All notable changes to this project are documented in this file.
     - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::set_options(self, options) -> Self` is available as a builder method, e.g. `QueryClient::new().set_options(..)`. 
     - `QueryClient::provide()` replaced with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
     - `QueryClient::expect()` removed, `expect_context::<QueryClient>()` directly from leptos should be used instead. 
+- `QueryScope::new(fetcher, options) -> QueryScope::new(fetcher).set_options(options)` ([#20](https://github.com/zakstucke/leptos-fetch/pull/20))
+- Default `stale_time` changed from `10 seconds` to never, providing less surprising default behaviour. ([#20](https://github.com/zakstucke/leptos-fetch/pull/20)) To revert to old behaviour: 
+
+```rust
+QueryClient::new()
+    .set_options(
+        QueryOptions::default()
+            .set_stale_time(Duration::from_secs(10)
+        )
+    )
+    .provide()
+```
 - Subscriptions: ([#9](https://github.com/zakstucke/leptos-fetch/pull/9))
     - `_subscribe_()` methods' `key: &K where K: 'static` argument replaced with `keyer: impl Fn() -> K + Send + Sync + 'static where K: Send + Sync + static`. This makes subscribers reactive to a changing key value to mirror resources.
     - Because `Send + Sync` are now required, `subscribe_is_fetching_local()`, `subscribe_is_fetching_arc_local()`, `subscribe_is_loading_local()`, `subscribe_is_loading_arc_local()` have been added that do not have these bounds.

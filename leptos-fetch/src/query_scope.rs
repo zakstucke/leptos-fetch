@@ -77,19 +77,14 @@ macro_rules! define {
 
         paste! {
             impl<K, V> $name<K, V> {
-                /// TODO might want to split off options into set_options().
-
                 /// Create a new
                 #[doc = $sname]
-                ///  with specific [`QueryOptions`] to only apply to this query type.
-                ///
+                ///.
                 /// If the query fn does not have a key argument, `K=()`
                 ///
-                /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
                 #[track_caller]
                 pub fn new<M>(
                     query_scope: impl [<$name Trait>]<K, V, M> $($impl_fn_generics)* + 'static,
-                    options: QueryOptions
                 ) -> Self
                 where
                     K: 'static $($impl_fn_generics)*,
@@ -97,7 +92,7 @@ macro_rules! define {
                 {
                     Self {
                         cache_key: query_scope.cache_key(),
-                        options,
+                        options: query_scope.options().unwrap_or_default(),
                         #[cfg(any(
                             all(debug_assertions, feature = "devtools"),
                             feature = "devtools-always"
@@ -105,6 +100,14 @@ macro_rules! define {
                         title: query_scope.title(),
                         query: Arc::new(move |key| Box::pin(query_scope.query(key))),
                     }
+                }
+
+                /// Set specific [`QueryOptions`] to only apply to this query type.
+                ///
+                /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
+                pub fn set_options(mut self, options: QueryOptions) -> Self {
+                    self.options = options;
+                    self
                 }
 
                 #[cfg(any(feature = "devtools", feature = "devtools-always"))]
