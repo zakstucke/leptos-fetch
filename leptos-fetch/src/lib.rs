@@ -8,6 +8,7 @@
 #![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_auto_cfg))]
 
 mod cache;
+mod cache_scope;
 mod debug_if_devtools_enabled;
 #[cfg(any(
     all(debug_assertions, feature = "devtools"),
