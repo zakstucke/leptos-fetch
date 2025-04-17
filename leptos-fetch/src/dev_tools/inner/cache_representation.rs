@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     collections::HashMap,
     sync::{Arc, atomic::AtomicBool},
 };
@@ -12,6 +11,7 @@ use crate::{
     QueryClient, QueryOptions,
     events::Event,
     maybe_local::MaybeLocal,
+    query_scope::ScopeCacheKey,
     subs_client::QueryCreatedInfo,
     utils::{DebugValue, KeyHash, new_buster_id},
 };
@@ -20,11 +20,11 @@ use super::{components::ColorOption, sort::SortConfig};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CacheRep {
-    pub all_queries: ArcRwSignal<HashMap<TypeId, QueriesRep>>,
+    pub all_queries: ArcRwSignal<HashMap<ScopeCacheKey, QueriesRep>>,
 }
 
 impl CacheRep {
-    pub fn remove_query(&self, cache_key: TypeId, key_hash: KeyHash) {
+    pub fn remove_query(&self, cache_key: ScopeCacheKey, key_hash: KeyHash) {
         let mut guard = self.all_queries.write();
         let remove_type = if let Some(queries) = guard.get_mut(&cache_key) {
             let mut query_guard = queries.scoped_queries.write();
@@ -86,7 +86,7 @@ impl QueryState {
 
 #[derive(Clone, Debug)]
 pub struct QueryRep {
-    pub cache_key: TypeId,
+    pub cache_key: ScopeCacheKey,
     pub key_hash: KeyHash,
     pub debug_key: DebugValue,
     pub created_at: chrono::DateTime<chrono::Utc>,

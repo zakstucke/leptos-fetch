@@ -10,7 +10,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
-    query_scope::QueryTypeInfo,
+    query_scope::{QueryTypeInfo, ScopeCacheKey},
     safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
@@ -29,7 +29,7 @@ pub(crate) struct Query<K, V: 'static> {
     active_resources: Arc<Mutex<HashSet<u64>>>,
     pub buster: ArcRwSignal<u64>,
     scope_lookup: ScopeLookup,
-    cache_key: TypeId,
+    cache_key: ScopeCacheKey,
     key_hash: KeyHash,
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),

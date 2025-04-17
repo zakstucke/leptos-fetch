@@ -4,7 +4,7 @@ pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::MAX; // Never
 pub(crate) const DEFAULT_GC_TIME: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Configuration to be used with [`crate::QueryClient`] and individual query types.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Hash)]
 pub struct QueryOptions {
     stale_time: Option<Duration>,
     gc_time: Option<Duration>,

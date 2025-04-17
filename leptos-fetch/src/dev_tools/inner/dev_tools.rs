@@ -1,5 +1,3 @@
-use std::any::TypeId;
-
 use chrono::{TimeDelta, Utc};
 
 use leptos::{portal::Portal, prelude::*};
@@ -12,7 +10,9 @@ use super::{
 };
 
 use crate::{
-    QueryClient, safe_dt_dur_add,
+    QueryClient,
+    query_scope::ScopeCacheKey,
+    safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
 };
 
@@ -533,7 +533,10 @@ fn Header() -> impl IntoView {
 }
 
 #[component]
-fn SearchInput(filter: ArcRwSignal<String>, maybe_cache_key: Option<TypeId>) -> impl IntoView {
+fn SearchInput(
+    filter: ArcRwSignal<String>,
+    maybe_cache_key: Option<ScopeCacheKey>,
+) -> impl IntoView {
     view! {
         <div class="lq-relative lq-w-64">
             <div class="lq-pointer-events-none lq-absolute lq-inset-y-0 lq-left-0 lq-flex lq-items-center lq-pl-3 lq-text-zinc-400">
@@ -686,7 +689,7 @@ fn CaretSwitch(open: RwSignal<bool>) -> impl IntoView {
 }
 
 #[component]
-fn ClearCache(client: QueryClient, maybe_cache_key: Option<TypeId>) -> impl IntoView {
+fn ClearCache(client: QueryClient, maybe_cache_key: Option<ScopeCacheKey>) -> impl IntoView {
     view! {
         <button
             class="lq-bg-lq-input lq-text-lq-input-foreground lq-rounded-md lq-px-2 lq-py-1 lq-text-xs lq-inline-flex lq-items-center lq-gap-1 lq-border lq-border-lq-border"
@@ -740,7 +743,7 @@ fn ClearCache(client: QueryClient, maybe_cache_key: Option<TypeId>) -> impl Into
 }
 
 #[component]
-fn QueryRow(cache_key: TypeId, key_hash: KeyHash, query: QueryRep) -> impl IntoView {
+fn QueryRow(cache_key: ScopeCacheKey, key_hash: KeyHash, query: QueryRep) -> impl IntoView {
     let DevtoolsContext {
         selected_query,
         cache_rep,

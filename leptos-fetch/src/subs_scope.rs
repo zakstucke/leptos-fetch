@@ -9,18 +9,19 @@ use leptos::prelude::{ArcRwSignal, ArcSignal, Get, GetUntracked, Set};
 use crate::{
     cache::ScopeLookup,
     maybe_local::MaybeLocal,
-    utils::{KeyHash, new_subscription_id, new_value_modified_id},
+    query_scope::ScopeCacheKey,
+    utils::{new_subscription_id, new_value_modified_id, KeyHash},
 };
 
 // cache_key -> sub_id -> Sub
-type Subs = Arc<parking_lot::Mutex<HashMap<TypeId, HashMap<u64, Sub>>>>;
+type Subs = Arc<parking_lot::Mutex<HashMap<ScopeCacheKey, HashMap<u64, Sub>>>>;
 
 #[derive(Debug)]
 pub(crate) struct ScopeSubs {
     subs: Subs,
     // Used to initialise as true when a subscriber is created whilst a fetch is ongoing:
     // (bool = loading_first_time)
-    actively_fetching: HashMap<(TypeId, KeyHash), bool>,
+    actively_fetching: HashMap<(ScopeCacheKey, KeyHash), bool>,
     #[allow(dead_code)]
     scope_lookup: ScopeLookup,
 }
@@ -36,7 +37,7 @@ impl ScopeSubs {
 
     pub fn add_is_fetching_subscription(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<bool> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
@@ -58,7 +59,7 @@ impl ScopeSubs {
 
     pub fn add_is_loading_subscription(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<bool> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
@@ -90,7 +91,7 @@ impl ScopeSubs {
     ))]
     pub fn add_active_resources_subscription(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<usize> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
@@ -121,7 +122,7 @@ impl ScopeSubs {
 
     pub fn add_value_set_updated_or_removed_subscription(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
         v_type_id: TypeId,
     ) -> ArcSignal<Option<u64>> {
@@ -139,7 +140,7 @@ impl ScopeSubs {
     ))]
     pub fn add_events_subscription(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<Vec<crate::events::Event>> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
@@ -171,7 +172,7 @@ impl ScopeSubs {
     // Returns None when keyer is local and wrong thread or no key.
     fn add_subscription<T>(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
         new_signal: impl Fn() -> ArcRwSignal<T> + Send + Sync + 'static,
         new_variant: impl Fn(ArcRwSignal<T>) -> SubVariant + Send + Sync + 'static,
@@ -209,7 +210,7 @@ impl ScopeSubs {
     /// NOTE: use with_notify_fetching instead.
     pub fn notify_fetching_start(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         loading_first_time: bool,
     ) {
@@ -249,7 +250,7 @@ impl ScopeSubs {
     /// NOTE: use with_notify_fetching instead.
     pub fn notify_fetching_finish(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         loading_first_time: bool,
     ) {
@@ -291,7 +292,7 @@ impl ScopeSubs {
     ))]
     pub fn notify_active_resource_change(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         active_resources: usize,
     ) {
@@ -314,8 +315,11 @@ impl ScopeSubs {
         }
     }
 
-    pub fn notify_value_set_updated_or_removed<V>(&mut self, cache_key: TypeId, key_hash: KeyHash)
-    where
+    pub fn notify_value_set_updated_or_removed<V>(
+        &mut self,
+        cache_key: ScopeCacheKey,
+        key_hash: KeyHash,
+    ) where
         V: 'static,
     {
         let current_v_type_id = TypeId::of::<V>();
@@ -343,7 +347,7 @@ impl ScopeSubs {
     ))]
     pub fn notify_events_updated(
         &mut self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         new_events: &[crate::events::Event],
     ) {
@@ -412,7 +416,7 @@ enum SubVariant {
 
 struct SubDropGuard {
     sub_id: u64,
-    cache_key: TypeId,
+    cache_key: ScopeCacheKey,
     subs: Subs,
 }
 

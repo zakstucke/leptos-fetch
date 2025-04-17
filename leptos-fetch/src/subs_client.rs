@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use crate::{
     QueryOptions,
     cache::ScopeLookup,
+    query_scope::ScopeCacheKey,
     utils::{DebugValue, KeyHash, new_subscription_id},
 };
 
@@ -23,7 +24,7 @@ pub(crate) struct ClientSubs {
 
 #[derive(Debug, Clone)]
 pub(crate) struct QueryCreatedInfo {
-    pub cache_key: TypeId,
+    pub cache_key: ScopeCacheKey,
     pub scope_title: Arc<String>,
     pub key_hash: KeyHash,
     pub v_type_id: TypeId,
