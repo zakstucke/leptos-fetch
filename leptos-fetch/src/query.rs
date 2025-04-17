@@ -5,15 +5,15 @@ use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
-    QueryOptions,
     cache::ScopeLookup,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
-    query_scope::{QueryTypeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, ScopeCacheKey},
     safe_dt_dur_add,
-    utils::{KeyHash, new_buster_id},
+    utils::{new_buster_id, KeyHash},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
+    QueryOptions,
 };
 
 pub(crate) struct Query<K, V: 'static> {
@@ -157,7 +157,7 @@ impl<K, V> Query<K, V> {
     pub fn new(
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
-        query_scope_info: &QueryTypeInfo,
+        query_scope_info: &QueryScopeInfo,
         key_hash: KeyHash,
         key: MaybeLocal<K>,
         value: MaybeLocal<V>,

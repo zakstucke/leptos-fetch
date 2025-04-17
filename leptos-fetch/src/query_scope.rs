@@ -389,7 +389,7 @@ define! { [+ Send], [+ Send + Sync], QueryScope, "QueryScope", "threadsafe" }
 define! { [], [], QueryScopeLocal, "QueryScopeLocal", "non-threadsafe" }
 
 #[derive(Debug, Clone)]
-pub(crate) struct QueryTypeInfo {
+pub(crate) struct QueryScopeInfo {
     pub options: Option<QueryOptions>,
     pub cache_key: ScopeCacheKey,
     #[cfg(any(
@@ -399,7 +399,7 @@ pub(crate) struct QueryTypeInfo {
     pub title: Arc<String>,
 }
 
-impl QueryTypeInfo {
+impl QueryScopeInfo {
     #[track_caller]
     pub fn new<K, V, M>(query_scope: &impl QueryScopeTrait<K, V, M>) -> Self
     where

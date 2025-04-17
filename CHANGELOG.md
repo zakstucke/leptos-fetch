@@ -30,6 +30,7 @@ QueryClient::new()
     - `prefetch_local_query` -> `prefetch_query_local`
     - `fetch_local_query` -> `fetch_query_local`
     - `set_local_query` -> `set_query_local`
+- `QueryClient::invalidate_query_type` renamed `QueryClient::invalidate_query_scope` ([#24](https://github.com/zakstucke/leptos-fetch/pull/24))
 - MSRV increased to `1.85` to migrate to edition 2024 and use async closures ([#19](https://github.com/zakstucke/leptos-fetch/pull/19))
 
 ### Added

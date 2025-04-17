@@ -14,7 +14,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
-    query_scope::{QueryTypeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     utils::{KeyHash, OnDrop, new_buster_id, new_scope_id},
 };
@@ -26,7 +26,7 @@ pub(crate) struct Scope<K: 'static, V: 'static> {
     // To make sure parallel fetches for the same key aren't happening across different resources.
     fetcher_mutexes: HashMap<KeyHash, Arc<futures::lock::Mutex<()>>>,
     scope_lookup: ScopeLookup,
-    query_scope_info: QueryTypeInfo,
+    query_scope_info: QueryScopeInfo,
 }
 
 impl<K, V> Scope<K, V>
@@ -34,7 +34,7 @@ where
     K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
-    fn new(scope_lookup: ScopeLookup, query_scope_info: QueryTypeInfo) -> Self {
+    fn new(scope_lookup: ScopeLookup, query_scope_info: QueryScopeInfo) -> Self {
         Self {
             threadsafe_cache: HashMap::new(),
             local_caches: HashMap::new(),
@@ -427,7 +427,7 @@ impl ScopeLookup {
     pub fn fetcher_mutex<K, V>(
         &self,
         key_hash: KeyHash,
-        query_scope_info: &QueryTypeInfo,
+        query_scope_info: &QueryScopeInfo,
     ) -> Arc<futures::lock::Mutex<()>>
     where
         K: DebugIfDevtoolsEnabled + Clone + 'static,
@@ -468,7 +468,7 @@ impl ScopeLookup {
 
     pub fn with_cached_scope_mut<K, V, T>(
         &self,
-        query_scope_info: &QueryTypeInfo,
+        query_scope_info: &QueryScopeInfo,
         create_scope_if_missing: bool,
         cb: impl FnOnce(Option<&mut Scope<K, V>>) -> T,
     ) -> T
@@ -529,7 +529,7 @@ impl ScopeLookup {
         client_options: QueryOptions,
         scope_options: Option<QueryOptions>,
         maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
-        query_scope_info: &QueryTypeInfo,
+        query_scope_info: &QueryScopeInfo,
         key: &K,
         fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
