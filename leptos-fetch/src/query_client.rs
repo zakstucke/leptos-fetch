@@ -893,7 +893,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// The callback takes `Option<&mut V>`, will be None if the value is not available in the cache.
     ///
-    /// If you want async and/or always get the value, use [`QueryClient::map_query`]/[`QueryClient::map_query_local`].
+    /// If you want async and/or always get the value, use [`QueryClient::update_query_async`]/[`QueryClient::update_query_async_local`].
     ///
     /// Returns the output of the callback.
     #[track_caller]
@@ -948,7 +948,6 @@ impl<Codec: 'static> QueryClient<Codec> {
         }
     }
 
-    /// TODO might want to rename update_query_async
     /// Asynchronously map a threadsafe query in the cache from one value to another.
     ///
     /// Unlike [`QueryClient::update_query`], this will fetch the query first, if it doesn't exist.
@@ -957,7 +956,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the output of the callback.
     #[track_caller]
-    pub async fn map_query<'a, K, V, T, M>(
+    pub async fn update_query_async<'a, K, V, T, M>(
         &'a self,
         query_scope: impl QueryScopeTrait<K, V, M>,
         key: impl Borrow<K>,
@@ -967,7 +966,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Clone + Hash + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
     {
-        self.map_query_inner(
+        self.update_query_async_inner(
             QueryTypeInfo::new(&query_scope),
             move |key| async move { MaybeLocal::new(query_scope.query(key).await) },
             key.borrow(),
@@ -986,7 +985,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// Returns the output of the callback.
     #[track_caller]
-    pub async fn map_query_local<'a, K, V, T, M>(
+    pub async fn update_query_async_local<'a, K, V, T, M>(
         &'a self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
@@ -996,7 +995,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.map_query_inner(
+        self.update_query_async_inner(
             QueryTypeInfo::new_local(&query_scope),
             move |key| async move { MaybeLocal::new_local(query_scope.query(key).await) },
             key.borrow(),
@@ -1008,7 +1007,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[track_caller]
-    async fn map_query_inner<'a, K, V, T>(
+    async fn update_query_async_inner<'a, K, V, T>(
         &'a self,
         query_type_info: QueryTypeInfo,
         fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
