@@ -1304,7 +1304,7 @@ mod test {
                                     client.invalidate_query(fetcher.clone(), &2);
                                 }
                                 InvalidationType::Scope => {
-                                    client.invalidate_query_type(fetcher.clone());
+                                    client.invalidate_query_scope(fetcher.clone());
                                 }
                                 InvalidationType::Predicate => {
                                     client.invalidate_queries_with_predicate(fetcher.clone(), |key| key == &2);

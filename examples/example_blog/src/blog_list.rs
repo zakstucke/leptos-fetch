@@ -46,11 +46,11 @@ pub fn BlogList() -> impl IntoView {
                                                     if active_blogpost_id.get_untracked() == Some(id) {
                                                         active_blogpost_id.set(None);
                                                     }
-                                                    client.invalidate_query_type(list_blogposts);
+                                                    client.invalidate_query_scope(list_blogposts);
                                                 })
                                             }
                                         >
-                                            "Delete (update via client.invalidate_query_type())"
+                                            "Delete (update via client.invalidate_query_scope())"
                                         </button>
                                         <button
                                             type="button"

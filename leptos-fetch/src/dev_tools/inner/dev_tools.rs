@@ -717,7 +717,7 @@ fn ClearCache(client: QueryClient, maybe_cache_key: Option<ScopeCacheKey>) -> im
             class="lq-bg-lq-input lq-text-lq-input-foreground lq-rounded-md lq-px-2 lq-py-1 lq-text-xs lq-inline-flex lq-items-center lq-gap-1 lq-border lq-border-lq-border"
             on:click=move |_| {
                 if let Some(cache_key) = maybe_cache_key.as_ref() {
-                    client.invalidate_query_type_inner(cache_key);
+                    client.invalidate_query_scope_inner(cache_key);
                 } else {
                     client.invalidate_all_queries();
                 }
