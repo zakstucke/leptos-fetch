@@ -21,7 +21,7 @@ use crate::{
     maybe_local::MaybeLocal,
     query::Query,
     query_maybe_key::QueryMaybeKey,
-    query_scope::{QueryScopeLocalTrait, QueryScopeTrait, QueryScopeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, QueryScopeLocalTrait, QueryScopeTrait, ScopeCacheKey},
     resource_drop_guard::ResourceDropGuard,
     utils::{KeyHash, new_buster_id, new_resource_id},
 };
