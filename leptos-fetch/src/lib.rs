@@ -519,9 +519,9 @@ mod test {
                     }
                 );
 
-                // When wanting to load more items, map_query can be called declaratively to update the cached item:
+                // When wanting to load more items, update_query_async can be called declaratively to update the cached item:
                 client
-                    .map_query(get_list_query, (), async |last| {
+                    .update_query_async(get_list_query, (), async |last| {
                         if last.more_available {
                             let next_items = get_list_items(last.offset).await;
                             last.offset += next_items.len();
@@ -550,7 +550,7 @@ mod test {
     /// fetch_query_local
     /// update_query
     /// query_exists
-    /// map_query
+    /// update_query_async
     #[rstest]
     #[tokio::test]
     async fn test_declaratives() {
@@ -603,10 +603,10 @@ mod test {
                 assert_eq!(client.size(), 0);
                 assert_eq!(client.fetch_query(&fetcher, key).await, 6);
 
-                // map_query/map_query_local:
+                // update_query_async/update_query_async_local:
                 assert_eq!(
                     client
-                        .map_query(&fetcher, key, async |value| {
+                        .update_query_async(&fetcher, key, async |value| {
                             *value += 1;
                             *value
                         })
@@ -616,7 +616,7 @@ mod test {
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(7));
                 assert_eq!(
                     client
-                        .map_query(&fetcher, key, async |value| {
+                        .update_query_async(&fetcher, key, async |value| {
                             *value += 1;
                             *value
                         })
@@ -624,14 +624,14 @@ mod test {
                     8
                 );
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(8));
-                // is_fetching should be true throughout the whole lifetime of map_query, even the external async section:
+                // is_fetching should be true throughout the whole lifetime of update_query_async, even the external async section:
                 let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), move || key);
                 assert!(!is_fetching.get_untracked());
                 tokio::join!(
                     async {
                         assert_eq!(
                             client
-                                .map_query(&fetcher, key, async |value| {
+                                .update_query_async(&fetcher, key, async |value| {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(30))
                                         .await;
                                     *value += 1;

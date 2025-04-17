@@ -249,7 +249,7 @@ fn foo() {
 
 ## Declarative Query Interactions
 
-Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [map (async)](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
+Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [update async](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
 
 ### Query Invalidation
 
@@ -338,7 +338,7 @@ let resource = client.local_resource(get_page, move || active_page_index.get());
 active_page_index.set(1);
 ```
 
-Likewise with infinite queries, the [`QueryClient::map_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.map_query) makes it easy with a single cache key:
+Likewise with infinite queries, the [`QueryClient::update_query_async`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async) makes it easy with a single cache key:
 
 ```rust,no_run
 use leptos::prelude::*;
@@ -373,9 +373,9 @@ let client = leptos_fetch::QueryClient::new();
 let resource = client.local_resource(get_list_query, || ());
 
 async {
-    // When wanting to load more items, map_query can be called declaratively to update the cached item and resource:
+    // When wanting to load more items, update_query_async can be called declaratively to update the cached item and resource:
     client
-        .map_query(get_list_query, (), async |last| {
+        .update_query_async(get_list_query, (), async |last| {
             if last.more_available {
                 let next_items = get_list_items(last.offset).await;
                 last.offset += next_items.len();
