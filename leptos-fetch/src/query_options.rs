@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-// TODO change stale time to never by default, would be less surprising.
-pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_STALE_TIME: Duration = Duration::MAX; // Never
 pub(crate) const DEFAULT_GC_TIME: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Configuration to be used with [`crate::QueryClient`] and individual query types.
@@ -26,7 +25,7 @@ impl QueryOptions {
     ///
     /// Default: `10 seconds`
     #[track_caller]
-    pub fn set_stale_time(mut self, stale_time: Duration) -> Self {
+    pub fn set_stale_time(mut self, stale_time: std::time::Duration) -> Self {
         if let Some(gc_time) = self.gc_time {
             // If stale_time is greater than gc_time, stale_time will be set to gc_time.
             if stale_time > gc_time {
@@ -46,7 +45,7 @@ impl QueryOptions {
     ///
     /// Default: `5 minutes`
     #[track_caller]
-    pub fn set_gc_time(mut self, gc_time: Duration) -> Self {
+    pub fn set_gc_time(mut self, gc_time: std::time::Duration) -> Self {
         if let Some(stale_time) = self.stale_time {
             if stale_time > gc_time {
                 // If stale_time is greater than gc_time, stale_time will be set to gc_time.
@@ -64,7 +63,7 @@ impl QueryOptions {
     ///
     /// Default: No refetching
     #[track_caller]
-    pub fn set_refetch_interval(mut self, refetch_interval: Duration) -> Self {
+    pub fn set_refetch_interval(mut self, refetch_interval: std::time::Duration) -> Self {
         self.refetch_interval = Some(refetch_interval);
         self
     }
@@ -74,7 +73,7 @@ impl QueryOptions {
     /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
     ///
     /// Default: `10 seconds`
-    pub fn stale_time(&self) -> Duration {
+    pub fn stale_time(&self) -> std::time::Duration {
         self.stale_time.unwrap_or(DEFAULT_STALE_TIME)
     }
 
@@ -83,7 +82,7 @@ impl QueryOptions {
     /// After this time, if the query isn't being used by any resources, the query will be removed from the cache, to minimise the cache's size. If the query is in active use, the gc will be scheduled to check again after the same time interval.
     ///
     /// Default: `5 minutes`
-    pub fn gc_time(&self) -> Duration {
+    pub fn gc_time(&self) -> std::time::Duration {
         self.gc_time.unwrap_or(DEFAULT_GC_TIME)
     }
 
@@ -92,9 +91,18 @@ impl QueryOptions {
     /// If the query is being used by any resources, it will be invalidated and refetched in the background, updating active resources according to this interval.
     ///
     /// Default: No refetching
-    pub fn refetch_interval(&self) -> Option<Duration> {
+    pub fn refetch_interval(&self) -> Option<std::time::Duration> {
         self.refetch_interval
     }
+}
+
+pub(crate) fn safe_dt_dur_add(
+    start: chrono::DateTime<chrono::Utc>,
+    dur: std::time::Duration,
+) -> chrono::DateTime<chrono::Utc> {
+    start
+        .checked_add_signed(chrono::Duration::from_std(dur).unwrap_or(chrono::Duration::MAX))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
 }
 
 pub(crate) fn options_combine(base: QueryOptions, scope: Option<QueryOptions>) -> QueryOptions {
