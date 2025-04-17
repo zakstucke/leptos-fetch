@@ -21,7 +21,7 @@ use crate::{
     maybe_local::MaybeLocal,
     query::Query,
     query_maybe_key::QueryMaybeKey,
-    query_scope::{QueryScopeLocalTrait, QueryScopeTrait, QueryTypeInfo},
+    query_scope::{QueryScopeLocalTrait, QueryScopeTrait, QueryTypeInfo, ScopeCacheKey},
     resource_drop_guard::ResourceDropGuard,
     utils::{KeyHash, new_buster_id, new_resource_id},
 };
@@ -1582,7 +1582,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         self.invalidate_query_type_inner(&query_scope.cache_key())
     }
 
-    pub(crate) fn invalidate_query_type_inner(&self, cache_key: &TypeId) {
+    pub(crate) fn invalidate_query_type_inner(&self, cache_key: &ScopeCacheKey) {
         let mut guard = self.scope_lookup.scopes_mut();
         if let Some(scope) = guard.get_mut(cache_key) {
             scope.invalidate_scope();

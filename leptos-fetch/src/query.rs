@@ -1,4 +1,4 @@
-use std::{any::TypeId, collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
 use leptos::prelude::{ArcRwSignal, Set};
 use parking_lot::Mutex;
@@ -10,7 +10,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
-    query_scope::QueryTypeInfo,
+    query_scope::{QueryTypeInfo, ScopeCacheKey},
     safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
@@ -29,7 +29,7 @@ pub(crate) struct Query<K, V: 'static> {
     active_resources: Arc<Mutex<HashSet<u64>>>,
     pub buster: ArcRwSignal<u64>,
     scope_lookup: ScopeLookup,
-    cache_key: TypeId,
+    cache_key: ScopeCacheKey,
     key_hash: KeyHash,
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
@@ -64,7 +64,7 @@ pub(crate) trait DynQuery {
 
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue;
 
-    fn value_type_id(&self) -> TypeId;
+    fn value_type_id(&self) -> std::any::TypeId;
 
     fn combined_options(&self) -> QueryOptions;
 
@@ -103,8 +103,8 @@ where
         crate::utils::DebugValue::new(self.value_maybe_stale.value().value_may_panic())
     }
 
-    fn value_type_id(&self) -> TypeId {
-        TypeId::of::<V>()
+    fn value_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<V>()
     }
 
     fn combined_options(&self) -> QueryOptions {

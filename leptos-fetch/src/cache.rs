@@ -1,5 +1,5 @@
 use std::{
-    any::{Any, TypeId},
+    any::Any,
     collections::{HashMap, hash_map::Entry},
     future::Future,
     hash::Hash,
@@ -14,7 +14,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
-    query_scope::QueryTypeInfo,
+    query_scope::{QueryTypeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     utils::{KeyHash, OnDrop, new_buster_id, new_scope_id},
 };
@@ -87,7 +87,7 @@ where
                 key_hash,
                 // SAFETY: query just created, so same thread
                 debug_key: crate::utils::DebugValue::new(query.key().value_may_panic()),
-                v_type_id: TypeId::of::<V>(),
+                v_type_id: std::any::TypeId::of::<V>(),
                 combined_options: query.combined_options,
             };
             self.insert_without_query_created_notif(key_hash, query);
@@ -289,7 +289,7 @@ pub(crate) struct ScopeLookup {
     scope_id: u64,
 }
 
-type Scopes = HashMap<TypeId, Box<dyn ScopeTrait>>;
+type Scopes = HashMap<ScopeCacheKey, Box<dyn ScopeTrait>>;
 
 static SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
     LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
@@ -362,7 +362,7 @@ impl ScopeLookup {
 
     pub async fn with_notify_fetching<T>(
         &self,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         loading_first_time: bool,
         fut: impl Future<Output = T>,
@@ -407,7 +407,7 @@ impl ScopeLookup {
     pub fn mark_resource_dropped<K, V>(
         &self,
         key_hash: &KeyHash,
-        cache_key: &TypeId,
+        cache_key: &ScopeCacheKey,
         resource_id: u64,
     ) where
         K: DebugIfDevtoolsEnabled + 'static,
@@ -448,7 +448,7 @@ impl ScopeLookup {
     pub fn with_cached_query<K, V, T>(
         &self,
         key_hash: &KeyHash,
-        cache_key: &TypeId,
+        cache_key: &ScopeCacheKey,
         cb: impl FnOnce(Option<&Query<K, V>>) -> T,
     ) -> T
     where
@@ -500,7 +500,7 @@ impl ScopeLookup {
         }
     }
 
-    pub fn gc_query<K, V>(&self, cache_key: &TypeId, key_hash: &KeyHash)
+    pub fn gc_query<K, V>(&self, cache_key: &ScopeCacheKey, key_hash: &KeyHash)
     where
         K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
@@ -615,7 +615,7 @@ impl ScopeLookup {
                                 cache_key: query_type_info.cache_key,
                                 scope_title: query_type_info.title.clone(),
                                 key_hash,
-                                v_type_id: TypeId::of::<V>(),
+                                v_type_id: std::any::TypeId::of::<V>(),
                                 debug_key: crate::utils::DebugValue::new(key),
                                 combined_options: crate::options_combine(
                                     client_options,

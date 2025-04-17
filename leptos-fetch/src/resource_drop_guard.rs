@@ -1,9 +1,10 @@
-use std::{any::TypeId, sync::Arc};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 
 use crate::{
-    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, utils::KeyHash,
+    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
+    query_scope::ScopeCacheKey, utils::KeyHash,
 };
 
 #[derive(Clone)]
@@ -17,7 +18,7 @@ where
     K: DebugIfDevtoolsEnabled + 'static,
     V: 'static,
 {
-    pub fn new(scope_lookup: ScopeLookup, resource_id: u64, cache_key: TypeId) -> Self {
+    pub fn new(scope_lookup: ScopeLookup, resource_id: u64, cache_key: ScopeCacheKey) -> Self {
         ResourceDropGuard(Arc::new(Mutex::new(ResourceDropGuardInner::<K, V> {
             scope_lookup,
             resource_id,
@@ -50,7 +51,7 @@ where
     scope_lookup: ScopeLookup,
     resource_id: u64,
     active_key_hash: Option<KeyHash>,
-    cache_key: TypeId,
+    cache_key: ScopeCacheKey,
     _k: std::marker::PhantomData<K>,
     _v: std::marker::PhantomData<V>,
 }

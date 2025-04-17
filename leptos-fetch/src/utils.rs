@@ -19,7 +19,7 @@ defined_id_gen!(new_subscription_id);
 defined_id_gen!(new_value_modified_id);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyHash(u64);
+pub(crate) struct KeyHash(u64);
 
 impl KeyHash {
     pub fn new<K: Hash>(key: &K) -> Self {

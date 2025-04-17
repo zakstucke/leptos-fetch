@@ -3,11 +3,30 @@ use std::{
     any::TypeId,
     fmt::{self, Debug, Formatter},
     future::Future,
+    hash::{DefaultHasher, Hash, Hasher},
     pin::Pin,
     sync::Arc,
 };
 
 use crate::QueryOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeCacheKey(u64);
+
+impl ScopeCacheKey {
+    pub fn new(fetcher_type_id: TypeId, options: &QueryOptions) -> Self {
+        let mut hasher = DefaultHasher::new();
+        fetcher_type_id.hash(&mut hasher);
+        options.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
+
+impl Hash for ScopeCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 #[cfg(any(
     all(debug_assertions, feature = "devtools"),
@@ -56,8 +75,8 @@ macro_rules! define {
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
-            // TODO the cache_key should include a hash of the options and the title too
-            cache_key: TypeId,
+            fetcher_type_id: TypeId,
+            cache_key: ScopeCacheKey,
             options: QueryOptions,
             #[cfg(any(
                 all(debug_assertions, feature = "devtools"),
@@ -90,9 +109,12 @@ macro_rules! define {
                     K: 'static $($impl_fn_generics)*,
                     V: 'static $($impl_fn_generics)*,
                 {
+                    let options = query_scope.options().unwrap_or_default();
+                    let fetcher_type_id = query_scope.fetcher_type_id();
                     Self {
-                        cache_key: query_scope.cache_key(),
-                        options: query_scope.options().unwrap_or_default(),
+                        fetcher_type_id,
+                        cache_key: ScopeCacheKey::new(fetcher_type_id, &options),
+                        options,
                         #[cfg(any(
                             all(debug_assertions, feature = "devtools"),
                             feature = "devtools-always"
@@ -134,7 +156,9 @@ macro_rules! define {
                     Default::default()
                 }
 
-                fn cache_key(&self) -> TypeId;
+                fn fetcher_type_id(&self) -> TypeId;
+
+                fn cache_key(&self) -> ScopeCacheKey;
 
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static;
 
@@ -154,8 +178,12 @@ macro_rules! define {
                 Fut: Future<Output = V> $($impl_fut_generics)* + 'static,
              {
 
-                fn cache_key(&self) -> TypeId {
+                fn fetcher_type_id(&self) -> TypeId {
                     TypeId::of::<Self>()
+                }
+
+                fn cache_key(&self) -> ScopeCacheKey {
+                    ScopeCacheKey::new(TypeId::of::<Self>(), &Default::default())
                 }
 
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
@@ -178,9 +206,12 @@ macro_rules! define {
                 F: Fn() -> Fut + 'static,
                 Fut: Future<Output = V> $($impl_fut_generics)* + 'static,
              {
-
-                fn cache_key(&self) -> TypeId {
+                fn fetcher_type_id(&self) -> TypeId {
                     TypeId::of::<Self>()
+                }
+
+                fn cache_key(&self) -> ScopeCacheKey {
+                    ScopeCacheKey::new(TypeId::of::<Self>(), &Default::default())
                 }
 
                 fn query(&self, _key: ()) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
@@ -206,7 +237,11 @@ macro_rules! define {
                     Some(self.options)
                 }
 
-                fn cache_key(&self) -> TypeId {
+                fn fetcher_type_id(&self) -> TypeId {
+                    self.fetcher_type_id
+                }
+
+                fn cache_key(&self) -> ScopeCacheKey {
                     self.cache_key
                 }
 
@@ -233,7 +268,11 @@ macro_rules! define {
                     Some(self.options)
                 }
 
-                fn cache_key(&self) -> TypeId {
+                fn fetcher_type_id(&self) -> TypeId {
+                    self.fetcher_type_id
+                }
+
+                fn cache_key(&self) -> ScopeCacheKey {
                     self.cache_key
                 }
 
@@ -261,7 +300,11 @@ macro_rules! define {
                     T::options(self)
                 }
 
-                fn cache_key(&self) -> TypeId {
+                fn fetcher_type_id(&self) -> TypeId {
+                    T::fetcher_type_id(self)
+                }
+
+                fn cache_key(&self) -> ScopeCacheKey {
                     T::cache_key(self)
                 }
 
@@ -291,7 +334,11 @@ where
         Some(self.options)
     }
 
-    fn cache_key(&self) -> TypeId {
+    fn fetcher_type_id(&self) -> TypeId {
+        self.fetcher_type_id
+    }
+
+    fn cache_key(&self) -> ScopeCacheKey {
         self.cache_key
     }
 
@@ -317,7 +364,11 @@ where
         Some(self.options)
     }
 
-    fn cache_key(&self) -> TypeId {
+    fn fetcher_type_id(&self) -> TypeId {
+        self.fetcher_type_id
+    }
+
+    fn cache_key(&self) -> ScopeCacheKey {
         self.cache_key
     }
 
@@ -340,7 +391,7 @@ define! { [], [], QueryScopeLocal, "QueryScopeLocal", "non-threadsafe" }
 #[derive(Debug, Clone)]
 pub(crate) struct QueryTypeInfo {
     pub options: Option<QueryOptions>,
-    pub cache_key: TypeId,
+    pub cache_key: ScopeCacheKey,
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"

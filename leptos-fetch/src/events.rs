@@ -1,12 +1,12 @@
 use core::fmt;
-use std::{any::TypeId, ops::Deref};
+use std::ops::Deref;
 
-use crate::{cache::ScopeLookup, utils::KeyHash};
+use crate::{cache::ScopeLookup, query_scope::ScopeCacheKey, utils::KeyHash};
 
 #[derive(Debug)]
 pub(crate) struct Events {
     scope_lookup: ScopeLookup,
-    cache_key: TypeId,
+    cache_key: ScopeCacheKey,
     key_hash: KeyHash,
     events: Vec<Event>,
 }
@@ -22,7 +22,7 @@ impl Deref for Events {
 impl Events {
     pub fn new(
         scope_lookup: &ScopeLookup,
-        cache_key: TypeId,
+        cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         events: Vec<Event>,
     ) -> Self {
