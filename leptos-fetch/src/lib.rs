@@ -1209,7 +1209,6 @@ mod test {
 
                 macro_rules! check {
                     ($get_resource:expr) => {{
-                        
                         // // TODO enable these on 0.8 now SendWrapper sorted:
                         // let resource = $get_resource();
                         // assert_eq!(resource.get_untracked(), Some(None));
@@ -1219,8 +1218,10 @@ mod test {
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!($get_resource().await, None);
 
-                            let sub_is_loading = client.subscribe_is_loading(fetcher.clone(), keyer);
-                            let sub_is_fetching = client.subscribe_is_fetching(fetcher.clone(), keyer);
+                            let sub_is_loading =
+                                client.subscribe_is_loading(fetcher.clone(), keyer);
+                            let sub_is_fetching =
+                                client.subscribe_is_fetching(fetcher.clone(), keyer);
                             let sub_value = client.subscribe_value(fetcher.clone(), keyer);
 
                             assert_eq!(sub_is_loading.get_untracked(), false);
@@ -1237,7 +1238,7 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                             assert_eq!(sub_value.get_untracked(), Some(4));
                             assert_eq!(sub_is_loading.get_untracked(), false);
-                            assert_eq!(sub_is_fetching.get_untracked(), false);                            
+                            assert_eq!(sub_is_fetching.get_untracked(), false);
                         }
                     }};
                 }
@@ -1252,7 +1253,7 @@ mod test {
                 );
             })
             .await;
-    }    
+    }
 
     /// Make sure resources reload when queries invalidated correctly.
     #[rstest]
