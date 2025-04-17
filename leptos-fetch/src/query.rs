@@ -1,4 +1,4 @@
-use std::{any::TypeId, collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
 
 use leptos::prelude::{ArcRwSignal, Set};
 use parking_lot::Mutex;
@@ -64,7 +64,7 @@ pub(crate) trait DynQuery {
 
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue;
 
-    fn value_type_id(&self) -> TypeId;
+    fn value_type_id(&self) -> std::any::TypeId;
 
     fn combined_options(&self) -> QueryOptions;
 
@@ -103,8 +103,8 @@ where
         crate::utils::DebugValue::new(self.value_maybe_stale.value().value_may_panic())
     }
 
-    fn value_type_id(&self) -> TypeId {
-        TypeId::of::<V>()
+    fn value_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<V>()
     }
 
     fn combined_options(&self) -> QueryOptions {

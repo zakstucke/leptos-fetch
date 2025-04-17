@@ -1,5 +1,5 @@
 use std::{
-    any::{Any, TypeId},
+    any::Any,
     collections::{HashMap, hash_map::Entry},
     future::Future,
     hash::Hash,
@@ -87,7 +87,7 @@ where
                 key_hash,
                 // SAFETY: query just created, so same thread
                 debug_key: crate::utils::DebugValue::new(query.key().value_may_panic()),
-                v_type_id: TypeId::of::<V>(),
+                v_type_id: std::any::TypeId::of::<V>(),
                 combined_options: query.combined_options,
             };
             self.insert_without_query_created_notif(key_hash, query);
