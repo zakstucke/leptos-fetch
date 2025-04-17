@@ -37,13 +37,16 @@ impl ScopeSubs {
     pub fn add_is_fetching_subscription(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<bool> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
-        let initial_key = keyer.value_may_panic().get_untracked();
-        let initial = self
-            .actively_fetching
-            .contains_key(&(cache_key, initial_key));
+        let maybe_initial_key = keyer.value_may_panic().get_untracked();
+        let initial = if let Some(initial_key) = maybe_initial_key {
+            self.actively_fetching
+                .contains_key(&(cache_key, initial_key))
+        } else {
+            false
+        };
         let signal = self.add_subscription(
             cache_key,
             keyer,
@@ -56,14 +59,17 @@ impl ScopeSubs {
     pub fn add_is_loading_subscription(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<bool> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
-        let initial_key = keyer.value_may_panic().get_untracked();
-        let initial = if let Some(loading_first_time) =
-            self.actively_fetching.get(&(cache_key, initial_key))
-        {
-            *loading_first_time
+        let maybe_initial_key = keyer.value_may_panic().get_untracked();
+        let initial = if let Some(initial_key) = maybe_initial_key {
+            if let Some(loading_first_time) = self.actively_fetching.get(&(cache_key, initial_key))
+            {
+                *loading_first_time
+            } else {
+                false
+            }
         } else {
             false
         };
@@ -85,20 +91,23 @@ impl ScopeSubs {
     pub fn add_active_resources_subscription(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<usize> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
-        let initial_key = keyer.value_may_panic().get_untracked();
-        let initial = self
-            .scope_lookup
-            .scopes()
-            .get(&cache_key)
-            .and_then(|scope| {
-                scope
-                    .get_dyn_query(&initial_key)
-                    .map(|query| query.active_resources_len())
-            })
-            .unwrap_or(0);
+        let maybe_initial_key = keyer.value_may_panic().get_untracked();
+        let initial = if let Some(initial_key) = maybe_initial_key {
+            self.scope_lookup
+                .scopes()
+                .get(&cache_key)
+                .and_then(|scope| {
+                    scope
+                        .get_dyn_query(&initial_key)
+                        .map(|query| query.active_resources_len())
+                })
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
         let signal = self.add_subscription(
             cache_key,
@@ -113,7 +122,7 @@ impl ScopeSubs {
     pub fn add_value_set_updated_or_removed_subscription(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
         v_type_id: TypeId,
     ) -> ArcSignal<Option<u64>> {
         self.add_subscription(
@@ -131,20 +140,23 @@ impl ScopeSubs {
     pub fn add_events_subscription(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     ) -> ArcSignal<Vec<crate::events::Event>> {
         // WONTPANIC: this is called from the initial thread the keyer was provided from:
-        let initial_key = keyer.value_may_panic().get_untracked();
-        let initial = self
-            .scope_lookup
-            .scopes()
-            .get(&cache_key)
-            .and_then(|scope| {
-                scope
-                    .get_dyn_query(&initial_key)
-                    .map(|query| query.events().to_vec())
-            })
-            .unwrap_or_default();
+        let maybe_initial_key = keyer.value_may_panic().get_untracked();
+        let initial = if let Some(initial_key) = maybe_initial_key {
+            self.scope_lookup
+                .scopes()
+                .get(&cache_key)
+                .and_then(|scope| {
+                    scope
+                        .get_dyn_query(&initial_key)
+                        .map(|query| query.events().to_vec())
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
 
         let signal = self.add_subscription(
             cache_key,
@@ -156,11 +168,11 @@ impl ScopeSubs {
         ArcSignal::derive(move || signal.get().unwrap_or_default())
     }
 
-    // Returns None when keyer is local and wrong thread.
+    // Returns None when keyer is local and wrong thread or no key.
     fn add_subscription<T>(
         &mut self,
         cache_key: TypeId,
-        keyer: MaybeLocal<ArcSignal<KeyHash>>,
+        keyer: MaybeLocal<ArcSignal<Option<KeyHash>>>,
         new_signal: impl Fn() -> ArcRwSignal<T> + Send + Sync + 'static,
         new_variant: impl Fn(ArcRwSignal<T>) -> SubVariant + Send + Sync + 'static,
     ) -> ArcSignal<Option<T>>
@@ -212,7 +224,7 @@ impl ScopeSubs {
                     .key_hash
                     .value_if_safe()
                     .map(|signal| signal.get_untracked())
-                    == Some(key_hash)
+                    == Some(Some(key_hash))
                 {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
@@ -251,7 +263,7 @@ impl ScopeSubs {
                     .key_hash
                     .value_if_safe()
                     .map(|signal| signal.get_untracked())
-                    == Some(key_hash)
+                    == Some(Some(key_hash))
                 {
                     match &sub.variant {
                         SubVariant::IsFetching(signal) => {
@@ -290,7 +302,7 @@ impl ScopeSubs {
                         .key_hash
                         .value_if_safe()
                         .map(|signal| signal.get_untracked())
-                        == Some(key_hash)
+                        == Some(Some(key_hash))
                     {
                         // Don't want to trigger if not changing:
                         if signal.get_untracked() != active_resources {
@@ -315,7 +327,7 @@ impl ScopeSubs {
                         .key_hash
                         .value_if_safe()
                         .map(|signal| signal.get_untracked())
-                        == Some(key_hash)
+                        == Some(Some(key_hash))
                         && v_type_id == &current_v_type_id
                     {
                         signal.set(new_value_modified_id());
@@ -342,7 +354,7 @@ impl ScopeSubs {
                         .key_hash
                         .value_if_safe()
                         .map(|signal| signal.get_untracked())
-                        == Some(key_hash)
+                        == Some(Some(key_hash))
                     {
                         signal.set(new_events.to_vec());
                     }
@@ -360,14 +372,14 @@ impl ScopeSubs {
 #[derive(Debug)]
 struct Sub {
     variant: SubVariant,
-    key_hash: MaybeLocal<ArcSignal<KeyHash>>,
+    key_hash: MaybeLocal<ArcSignal<Option<KeyHash>>>,
     _drop_guard: Weak<SubDropGuard>,
 }
 
 impl Sub {
     fn new(
         variant: SubVariant,
-        key_hash: MaybeLocal<ArcSignal<KeyHash>>,
+        key_hash: MaybeLocal<ArcSignal<Option<KeyHash>>>,
         drop_guard: &Arc<SubDropGuard>,
     ) -> Self {
         Self {

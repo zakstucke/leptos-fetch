@@ -1,10 +1,7 @@
 use leptos::{either::Either, prelude::*};
 use leptos_fetch::QueryClient;
-use server_fn::ServerFnError;
 
-use crate::blog_api::{
-    delete_blogpost, get_blogpost_full, list_blogposts, AddBlogpost, BlogPostFull,
-};
+use crate::blog_api::{delete_blogpost, get_blogpost_full, list_blogposts, AddBlogpost};
 
 #[component]
 pub fn BlogList() -> impl IntoView {
@@ -14,16 +11,8 @@ pub fn BlogList() -> impl IntoView {
 
     let bloglist = client.resource(list_blogposts, move || ());
 
-    // TODO would really like a cleaner way of having optional resources than being forced into creating an outer component.
-    async fn get_blogpost(id: Option<u16>) -> Result<Option<BlogPostFull>, ServerFnError> {
-        if let Some(id) = id {
-            get_blogpost_full(id).await
-        } else {
-            Ok(None)
-        }
-    }
     let active_blogpost_id = RwSignal::new(None);
-    let active_blogpost = client.resource(get_blogpost, move || active_blogpost_id.get());
+    let active_blogpost = client.resource(get_blogpost_full, move || active_blogpost_id.get());
 
     let existing_blogposts = move || {
         Suspend::new(async move {
@@ -100,7 +89,7 @@ pub fn BlogList() -> impl IntoView {
     let selected_blogpost = move || {
         Suspend::new(async move {
             active_blogpost.await.map(|blogpost| {
-                if let Some(blogpost) = blogpost {
+                if let Ok(Some(blogpost)) = blogpost {
                     Either::Left(view! {
                         <div style:padding-bottom="0.5em">
                             {format!(

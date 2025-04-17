@@ -20,6 +20,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
+    query_maybe_key::QueryMaybeKey,
     query_scope::{QueryScopeLocalTrait, QueryScopeTrait, QueryTypeInfo},
     resource_drop_guard::ResourceDropGuard,
     utils::{KeyHash, new_buster_id, new_resource_id},
@@ -161,13 +162,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn local_resource<K, V, M>(
+    pub fn local_resource<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
-        keyer: impl Fn() -> K + 'static,
-    ) -> LocalResource<V>
+        keyer: impl Fn() -> MaybeKey + 'static,
+    ) -> LocalResource<MaybeKey::MappedValue>
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let client = *self;
@@ -186,57 +189,63 @@ impl<Codec: 'static> QueryClient<Codec> {
             move || {
                 let query_scope = query_scope.clone();
                 let query_type_info = query_type_info.clone();
-                let key = keyer();
-                let key_hash = KeyHash::new(&key);
+                let maybe_key = keyer().into_maybe_key();
                 let drop_guard = drop_guard.clone();
-                drop_guard.set_active_key(key_hash);
+                if let Some(key) = maybe_key.as_ref() {
+                    drop_guard.set_active_key(KeyHash::new(key));
+                }
                 async move {
-                    scope_lookup
-                        .cached_or_fetch(
-                            client_options,
-                            query_options,
-                            None,
-                            &query_type_info,
-                            &key,
-                            {
-                                let query_scope = query_scope.clone();
-                                move |key| async move {
-                                    MaybeLocal::new_local(query_scope.query(key).await)
-                                }
-                            },
-                            |info| {
-                                info.cached.buster.track();
-                                info.cached.mark_resource_active(resource_id);
-                                match info.variant {
-                                    CachedOrFetchCbInputVariant::CachedUntouched => {
-                                        // If stale refetch in the background with the prefetch() function, which'll recognise it's stale, refetch it and invalidate busters:
-                                        if cfg!(any(test, not(feature = "ssr")))
-                                            && info.cached.stale()
-                                        {
-                                            let key = key.clone();
-                                            let query_scope = query_scope.clone();
-                                            // Just adding the SendWrapper and using spawn() rather than spawn_local() to fix tests:
-                                            leptos::task::spawn(SendWrapper::new(async move {
-                                                client
-                                                    .prefetch_query_local(query_scope, &key)
-                                                    .await;
-                                            }));
+                    if let Some(key) = maybe_key {
+                        let value = scope_lookup
+                            .cached_or_fetch(
+                                client_options,
+                                query_options,
+                                None,
+                                &query_type_info,
+                                &key,
+                                {
+                                    let query_scope = query_scope.clone();
+                                    move |key| async move {
+                                        MaybeLocal::new_local(query_scope.query(key).await)
+                                    }
+                                },
+                                |info| {
+                                    info.cached.buster.track();
+                                    info.cached.mark_resource_active(resource_id);
+                                    match info.variant {
+                                        CachedOrFetchCbInputVariant::CachedUntouched => {
+                                            // If stale refetch in the background with the prefetch() function, which'll recognise it's stale, refetch it and invalidate busters:
+                                            if cfg!(any(test, not(feature = "ssr")))
+                                                && info.cached.stale()
+                                            {
+                                                let key = key.clone();
+                                                let query_scope = query_scope.clone();
+                                                // Just adding the SendWrapper and using spawn() rather than spawn_local() to fix tests:
+                                                leptos::task::spawn(SendWrapper::new(async move {
+                                                    client
+                                                        .prefetch_query_local(query_scope, &key)
+                                                        .await;
+                                                }));
+                                            }
+                                        }
+                                        CachedOrFetchCbInputVariant::Fresh => {}
+                                        CachedOrFetchCbInputVariant::CachedUpdated => {
+                                            panic!("Didn't direct inner to refetch here. (bug)")
                                         }
                                     }
-                                    CachedOrFetchCbInputVariant::Fresh => {}
-                                    CachedOrFetchCbInputVariant::CachedUpdated => {
-                                        panic!("Didn't direct inner to refetch here. (bug)")
-                                    }
-                                }
-                                CachedOrFetchCbOutput::Return(
-                                    // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
-                                    info.cached.value_maybe_stale().value_may_panic().clone(),
-                                )
-                            },
-                            None,
-                            || MaybeLocal::new_local(key.clone()),
-                        )
-                        .await
+                                    CachedOrFetchCbOutput::Return(
+                                        // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
+                                        info.cached.value_maybe_stale().value_may_panic().clone(),
+                                    )
+                                },
+                                None,
+                                || MaybeLocal::new_local(key.clone()),
+                            )
+                            .await;
+                        MaybeKey::prepare_mapped_value(Some(value))
+                    } else {
+                        MaybeKey::prepare_mapped_value(None)
+                    }
                 }
             }
         })
@@ -246,13 +255,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_local_resource<K, V, M>(
+    pub fn arc_local_resource<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
-        keyer: impl Fn() -> K + 'static,
-    ) -> ArcLocalResource<V>
+        keyer: impl Fn() -> MaybeKey + 'static,
+    ) -> ArcLocalResource<MaybeKey::MappedValue>
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         // TODO on next 0.7 + 0.8 release, switch back to the arc as the base not the signal one:
@@ -269,20 +280,23 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn resource<K, V, M>(
+    pub fn resource<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> Resource<V, Codec>
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
+    ) -> Resource<MaybeKey::MappedValue, Codec>
     where
         K: DebugIfDevtoolsEnabled + PartialEq + Hash + Clone + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
-        Codec: Encoder<V> + Decoder<V>,
-        <Codec as Encoder<V>>::Error: Debug,
-        <Codec as Decoder<V>>::Error: Debug,
-        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
-        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
-        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
+        Codec: Encoder<MaybeKey::MappedValue> + Decoder<MaybeKey::MappedValue>,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Error: Debug,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Error: Debug,
+        <<Codec as Decoder<MaybeKey::MappedValue>>::Encoded as FromEncodedStr>::DecodingError:
+            Debug,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, false)
             .into()
@@ -296,20 +310,23 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn resource_blocking<K, V, M>(
+    pub fn resource_blocking<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> Resource<V, Codec>
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
+    ) -> Resource<MaybeKey::MappedValue, Codec>
     where
         K: DebugIfDevtoolsEnabled + PartialEq + Hash + Clone + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
-        Codec: Encoder<V> + Decoder<V>,
-        <Codec as Encoder<V>>::Error: Debug,
-        <Codec as Decoder<V>>::Error: Debug,
-        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
-        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
-        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
+        Codec: Encoder<MaybeKey::MappedValue> + Decoder<MaybeKey::MappedValue>,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Error: Debug,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Error: Debug,
+        <<Codec as Decoder<MaybeKey::MappedValue>>::Encoded as FromEncodedStr>::DecodingError:
+            Debug,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, true)
             .into()
@@ -323,20 +340,23 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_resource<K, V, M>(
+    pub fn arc_resource<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> ArcResource<V, Codec>
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
+    ) -> ArcResource<MaybeKey::MappedValue, Codec>
     where
         K: DebugIfDevtoolsEnabled + PartialEq + Hash + Clone + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
-        Codec: Encoder<V> + Decoder<V>,
-        <Codec as Encoder<V>>::Error: Debug,
-        <Codec as Decoder<V>>::Error: Debug,
-        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
-        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
-        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
+        Codec: Encoder<MaybeKey::MappedValue> + Decoder<MaybeKey::MappedValue>,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Error: Debug,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Error: Debug,
+        <<Codec as Decoder<MaybeKey::MappedValue>>::Encoded as FromEncodedStr>::DecodingError:
+            Debug,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, false)
     }
@@ -349,40 +369,46 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
     #[track_caller]
-    pub fn arc_resource_blocking<K, V, M>(
+    pub fn arc_resource_blocking<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
-    ) -> ArcResource<V, Codec>
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
+    ) -> ArcResource<MaybeKey::MappedValue, Codec>
     where
         K: DebugIfDevtoolsEnabled + PartialEq + Hash + Clone + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
-        Codec: Encoder<V> + Decoder<V>,
-        <Codec as Encoder<V>>::Error: Debug,
-        <Codec as Decoder<V>>::Error: Debug,
-        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
-        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
-        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
+        Codec: Encoder<MaybeKey::MappedValue> + Decoder<MaybeKey::MappedValue>,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Error: Debug,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Error: Debug,
+        <<Codec as Decoder<MaybeKey::MappedValue>>::Encoded as FromEncodedStr>::DecodingError:
+            Debug,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Encoded: FromEncodedStr,
     {
         self.arc_resource_with_options(query_scope, keyer, true)
     }
 
     #[track_caller]
-    fn arc_resource_with_options<K, V, M>(
+    fn arc_resource_with_options<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M> + Send + Sync + 'static,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
         blocking: bool,
-    ) -> ArcResource<V, Codec>
+    ) -> ArcResource<MaybeKey::MappedValue, Codec>
     where
         K: DebugIfDevtoolsEnabled + PartialEq + Hash + Clone + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
-        Codec: Encoder<V> + Decoder<V>,
-        <Codec as Encoder<V>>::Error: Debug,
-        <Codec as Decoder<V>>::Error: Debug,
-        <<Codec as Decoder<V>>::Encoded as FromEncodedStr>::DecodingError: Debug,
-        <Codec as Encoder<V>>::Encoded: IntoEncodedString,
-        <Codec as Decoder<V>>::Encoded: FromEncodedStr,
+        Codec: Encoder<MaybeKey::MappedValue> + Decoder<MaybeKey::MappedValue>,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Error: Debug,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Error: Debug,
+        <<Codec as Decoder<MaybeKey::MappedValue>>::Encoded as FromEncodedStr>::DecodingError:
+            Debug,
+        <Codec as Encoder<MaybeKey::MappedValue>>::Encoded: IntoEncodedString,
+        <Codec as Decoder<MaybeKey::MappedValue>>::Encoded: FromEncodedStr,
     {
         let client = *self;
         let client_options = self.options();
@@ -405,85 +431,98 @@ impl<Codec: 'static> QueryClient<Codec> {
                 let drop_guard = drop_guard.clone();
                 let keyer = keyer.clone();
                 move || {
-                    let key = keyer();
-                    let key_hash = KeyHash::new(&key);
-                    drop_guard.set_active_key(key_hash);
-                    scope_lookup.with_cached_query::<K, V, _>(
-                        &key_hash,
-                        &cache_key,
-                        |maybe_cached| {
-                            if let Some(cached) = maybe_cached {
-                                // Buster must be returned for it to be tracked.
-                                (key.clone(), cached.buster.get())
-                            } else {
-                                // Buster must be returned for it to be tracked.
-                                (key.clone(), buster_if_uncached.get())
-                            }
-                        },
-                    )
+                    if let Some(key) = keyer().into_maybe_key() {
+                        let key_hash = KeyHash::new(&key);
+                        drop_guard.set_active_key(key_hash);
+                        scope_lookup.with_cached_query::<K, V, _>(
+                            &key_hash,
+                            &cache_key,
+                            |maybe_cached| {
+                                if let Some(cached) = maybe_cached {
+                                    // Buster must be returned for it to be tracked.
+                                    (Some(key.clone()), cached.buster.get())
+                                } else {
+                                    // Buster must be returned for it to be tracked.
+                                    (Some(key.clone()), buster_if_uncached.get())
+                                }
+                            },
+                        )
+                    } else {
+                        (None, buster_if_uncached.get())
+                    }
                 }
             },
             {
                 let buster_if_uncached = buster_if_uncached.clone();
                 let query_type_info = query_type_info.clone();
-                move |(key, last_used_buster)| {
+                move |(maybe_key, last_used_buster)| {
                     let query_scope = query_scope.clone();
                     let query_type_info = query_type_info.clone();
                     let buster_if_uncached = buster_if_uncached.clone();
                     let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
                     async move {
-                        scope_lookup
-                            .cached_or_fetch(
-                                client_options,
-                                query_options,
-                                Some(buster_if_uncached.clone()),
-                                &query_type_info,
-                                &key,
-                                {
-                                    let query_scope = query_scope.clone();
-                                    move |key| async move {
-                                        MaybeLocal::new(query_scope.query(key).await)
-                                    }
-                                },
-                                |info| {
-                                    info.cached.mark_resource_active(resource_id);
-                                    match info.variant {
-                                        CachedOrFetchCbInputVariant::CachedUntouched => {
-                                            // If stale refetch in the background with the prefetch() function, which'll recognise it's stale, refetch it and invalidate busters:
-                                            if cfg!(any(test, not(feature = "ssr")))
-                                                && info.cached.stale()
-                                            {
-                                                let key = key.clone();
-                                                let query_scope = query_scope.clone();
-                                                leptos::task::spawn(async move {
-                                                    client.prefetch_query(query_scope, &key).await;
-                                                });
-                                            }
+                        if let Some(key) = maybe_key {
+                            let value = scope_lookup
+                                .cached_or_fetch(
+                                    client_options,
+                                    query_options,
+                                    Some(buster_if_uncached.clone()),
+                                    &query_type_info,
+                                    &key,
+                                    {
+                                        let query_scope = query_scope.clone();
+                                        move |key| async move {
+                                            MaybeLocal::new(query_scope.query(key).await)
+                                        }
+                                    },
+                                    |info| {
+                                        info.cached.mark_resource_active(resource_id);
+                                        match info.variant {
+                                            CachedOrFetchCbInputVariant::CachedUntouched => {
+                                                // If stale refetch in the background with the prefetch() function, which'll recognise it's stale, refetch it and invalidate busters:
+                                                if cfg!(any(test, not(feature = "ssr")))
+                                                    && info.cached.stale()
+                                                {
+                                                    let key = key.clone();
+                                                    let query_scope = query_scope.clone();
+                                                    leptos::task::spawn(async move {
+                                                        client
+                                                            .prefetch_query(query_scope, &key)
+                                                            .await;
+                                                    });
+                                                }
 
-                                            // Handle edge case where the key function saw it was uncached, so entered here,
-                                            // but when the cached_or_fetch was acquiring the fetch mutex, someone else cached it,
-                                            // meaning our key function won't be reactive correctly unless we invalidate it now:
-                                            if last_used_buster
-                                                != info.cached.buster.get_untracked()
-                                            {
-                                                buster_if_uncached
-                                                    .set(info.cached.buster.get_untracked());
+                                                // Handle edge case where the key function saw it was uncached, so entered here,
+                                                // but when the cached_or_fetch was acquiring the fetch mutex, someone else cached it,
+                                                // meaning our key function won't be reactive correctly unless we invalidate it now:
+                                                if last_used_buster
+                                                    != info.cached.buster.get_untracked()
+                                                {
+                                                    buster_if_uncached
+                                                        .set(info.cached.buster.get_untracked());
+                                                }
+                                            }
+                                            CachedOrFetchCbInputVariant::Fresh => {}
+                                            CachedOrFetchCbInputVariant::CachedUpdated => {
+                                                panic!("Didn't direct inner to refetch here. (bug)")
                                             }
                                         }
-                                        CachedOrFetchCbInputVariant::Fresh => {}
-                                        CachedOrFetchCbInputVariant::CachedUpdated => {
-                                            panic!("Didn't direct inner to refetch here. (bug)")
-                                        }
-                                    }
-                                    CachedOrFetchCbOutput::Return(
-                                        // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
-                                        info.cached.value_maybe_stale().value_may_panic().clone(),
-                                    )
-                                },
-                                None,
-                                || MaybeLocal::new(key.clone()),
-                            )
-                            .await
+                                        CachedOrFetchCbOutput::Return(
+                                            // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
+                                            info.cached
+                                                .value_maybe_stale()
+                                                .value_may_panic()
+                                                .clone(),
+                                        )
+                                    },
+                                    None,
+                                    || MaybeLocal::new(key.clone()),
+                                )
+                                .await;
+                            MaybeKey::prepare_mapped_value(Some(value))
+                        } else {
+                            MaybeKey::prepare_mapped_value(None)
+                        }
                     }
                 }
             },
@@ -501,40 +540,43 @@ impl<Codec: 'static> QueryClient<Codec> {
                     return Some(());
                 }
                 if let Some(val) = resource.read().as_ref() {
-                    scope_lookup.with_cached_scope_mut::<K, V, _>(
-                        &query_type_info,
-                        true,
-                        |maybe_scope| {
-                            let scope = maybe_scope.expect("provided a default");
-                            let key = keyer();
-                            let key_hash = KeyHash::new(&key);
-                            if !scope.contains_key(&key_hash) {
-                                let query = Query::new(
-                                    client_options,
-                                    scope_lookup,
-                                    &query_type_info,
-                                    key_hash,
-                                    MaybeLocal::new(key),
-                                    MaybeLocal::new(val.clone()),
-                                    buster_if_uncached.clone(),
-                                    query_options,
-                                    None,
-                                    #[cfg(any(
-                                        all(debug_assertions, feature = "devtools"),
-                                        feature = "devtools-always"
-                                    ))]
-                                    crate::events::Event::new(
-                                        crate::events::EventVariant::StreamedFromServer,
-                                    ),
-                                );
-                                scope.insert(key_hash, query);
-                            }
-                            scope
-                                .get(&key_hash)
-                                .unwrap()
-                                .mark_resource_active(resource_id)
-                        },
-                    );
+                    if MaybeKey::mapped_value_is_some(val) {
+                        scope_lookup.with_cached_scope_mut::<K, V, _>(
+                            &query_type_info,
+                            true,
+                            |maybe_scope| {
+                                let scope = maybe_scope.expect("provided a default");
+                                if let Some(key) = keyer().into_maybe_key() {
+                                    let key_hash = KeyHash::new(&key);
+                                    if !scope.contains_key(&key_hash) {
+                                        let query = Query::new(
+                                            client_options,
+                                            scope_lookup,
+                                            &query_type_info,
+                                            key_hash,
+                                            MaybeLocal::new(key),
+                                            MaybeLocal::new(MaybeKey::mapped_to_maybe_value(val.clone()).expect("Just checked MaybeKey::mapped_value_is_some() is true")),
+                                            buster_if_uncached.clone(),
+                                            query_options,
+                                            None,
+                                            #[cfg(any(
+                                                all(debug_assertions, feature = "devtools"),
+                                                feature = "devtools-always"
+                                            ))]
+                                            crate::events::Event::new(
+                                                crate::events::EventVariant::StreamedFromServer,
+                                            ),
+                                        );
+                                        scope.insert(key_hash, query);
+                                    }
+                                    scope
+                                        .get(&key_hash)
+                                        .unwrap()
+                                        .mark_resource_active(resource_id)
+                                }
+                            },
+                        );
+                    }
                     Some(())
                 } else {
                     None
@@ -1064,13 +1106,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading<K, V, M>(
+    pub fn subscribe_is_loading<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> Signal<bool>
     where
         K: Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.subscribe_is_loading_arc(query_scope, keyer).into()
@@ -1087,13 +1131,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_local<K, V, M>(
+    pub fn subscribe_is_loading_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> Signal<bool>
     where
         K: Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.subscribe_is_loading_arc_local(query_scope, keyer)
@@ -1111,13 +1157,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_arc_local<K, V, M>(
+    pub fn subscribe_is_loading_arc_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> ArcSignal<bool>
     where
         K: Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         let keyer = SendWrapper::new(keyer);
@@ -1125,7 +1173,9 @@ impl<Codec: 'static> QueryClient<Codec> {
             .scope_subscriptions_mut()
             .add_is_loading_subscription(
                 query_scope.cache_key(),
-                MaybeLocal::new_local(ArcSignal::derive(move || KeyHash::new(&keyer()))),
+                MaybeLocal::new_local(ArcSignal::derive(move || {
+                    keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+                })),
             )
     }
 
@@ -1140,20 +1190,24 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_loading_arc<K, V, M>(
+    pub fn subscribe_is_loading_arc<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
         K: Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.scope_lookup
             .scope_subscriptions_mut()
             .add_is_loading_subscription(
                 query_scope.cache_key(),
-                MaybeLocal::new(ArcSignal::derive(move || KeyHash::new(&keyer()))),
+                MaybeLocal::new(ArcSignal::derive(move || {
+                    keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+                })),
             )
     }
 
@@ -1168,13 +1222,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching<K, V, M>(
+    pub fn subscribe_is_fetching<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> Signal<bool>
     where
         K: Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.subscribe_is_fetching_arc(query_scope, keyer).into()
@@ -1191,13 +1247,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_local<K, V, M>(
+    pub fn subscribe_is_fetching_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> Signal<bool>
     where
         K: Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.subscribe_is_fetching_arc_local(query_scope, keyer)
@@ -1215,13 +1273,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_arc_local<K, V, M>(
+    pub fn subscribe_is_fetching_arc_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> ArcSignal<bool>
     where
         K: Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         let keyer = SendWrapper::new(keyer);
@@ -1229,7 +1289,9 @@ impl<Codec: 'static> QueryClient<Codec> {
             .scope_subscriptions_mut()
             .add_is_fetching_subscription(
                 query_scope.cache_key(),
-                MaybeLocal::new_local(ArcSignal::derive(move || KeyHash::new(&keyer()))),
+                MaybeLocal::new_local(ArcSignal::derive(move || {
+                    keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+                })),
             )
     }
 
@@ -1244,20 +1306,24 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// - `is_fetching=true` + `is_loading=false` means the resource is showing previous data, and will update once new data finishes refetching
     /// - `is_fetching=false` means the resource is showing the latest data and implies `is_loading=false`
     #[track_caller]
-    pub fn subscribe_is_fetching_arc<K, V, M>(
+    pub fn subscribe_is_fetching_arc<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> ArcSignal<bool>
     where
         K: Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: 'static,
         V: 'static,
     {
         self.scope_lookup
             .scope_subscriptions_mut()
             .add_is_fetching_subscription(
                 query_scope.cache_key(),
-                MaybeLocal::new(ArcSignal::derive(move || KeyHash::new(&keyer()))),
+                MaybeLocal::new(ArcSignal::derive(move || {
+                    keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+                })),
             )
     }
 
@@ -1269,13 +1335,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.       
     #[track_caller]
-    pub fn subscribe_value<K, V, M>(
+    pub fn subscribe_value<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> Signal<Option<V>>
     where
         K: DebugIfDevtoolsEnabled + Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
     {
         self.subscribe_value_arc(query_scope, keyer).into()
@@ -1289,18 +1357,22 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_local<K, V, M>(
+    pub fn subscribe_value_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> Signal<Option<V>, LocalStorage>
     where
         K: DebugIfDevtoolsEnabled + Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let cache_key = query_scope.cache_key();
         let keyer = SendWrapper::new(keyer);
-        let keyer = MaybeLocal::new(ArcSignal::derive(move || KeyHash::new(&keyer())));
+        let keyer = MaybeLocal::new(ArcSignal::derive(move || {
+            keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+        }));
 
         let dyn_signal = self
             .scope_lookup
@@ -1316,15 +1388,15 @@ impl<Codec: 'static> QueryClient<Codec> {
         Signal::derive_local(move || {
             dyn_signal.track();
             if let Some(key_signal) = keyer.value_if_safe() {
-                scope_lookup.with_cached_query::<K, V, _>(
-                    &key_signal.read_untracked(),
-                    &cache_key,
-                    |maybe_cached| {
+                if let Some(key) = key_signal.read_untracked().as_ref() {
+                    scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
                         // WONTPANIC: with_cached_query will only output values that are safe on this thread:
                         maybe_cached
                             .map(|cached| cached.value_maybe_stale().value_may_panic().clone())
-                    },
-                )
+                    })
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -1339,13 +1411,15 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_arc_local<K, V, M>(
+    pub fn subscribe_value_arc_local<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        keyer: impl Fn() -> K + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
     ) -> ArcSignal<Option<V>, LocalStorage>
     where
         K: DebugIfDevtoolsEnabled + Hash + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.subscribe_value_local(query_scope, keyer).into()
@@ -1359,17 +1433,21 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Compared to a resource:
     /// - This will not trigger a fetch of a query, if it's not in the cache, this will be `None`.
     #[track_caller]
-    pub fn subscribe_value_arc<K, V, M>(
+    pub fn subscribe_value_arc<K, MaybeKey, V, M>(
         &self,
         query_scope: impl QueryScopeTrait<K, V, M>,
-        keyer: impl Fn() -> K + Send + Sync + 'static,
+        keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> ArcSignal<Option<V>>
     where
         K: DebugIfDevtoolsEnabled + Hash + Send + Sync + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
     {
         let cache_key = query_scope.cache_key();
-        let keyer = MaybeLocal::new(ArcSignal::derive(move || KeyHash::new(&keyer())));
+        let keyer = MaybeLocal::new(ArcSignal::derive(move || {
+            keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+        }));
 
         let dyn_signal = self
             .scope_lookup
@@ -1384,15 +1462,15 @@ impl<Codec: 'static> QueryClient<Codec> {
         ArcSignal::derive(move || {
             dyn_signal.track();
             if let Some(key_signal) = keyer.value_if_safe() {
-                scope_lookup.with_cached_query::<K, V, _>(
-                    &key_signal.read_untracked(),
-                    &cache_key,
-                    |maybe_cached| {
+                if let Some(key) = key_signal.read_untracked().as_ref() {
+                    scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
                         // WONTPANIC: with_cached_query will only output values that are safe on this thread:
                         maybe_cached
                             .map(|cached| cached.value_maybe_stale().value_may_panic().clone())
-                    },
-                )
+                    })
+                } else {
+                    None
+                }
             } else {
                 None
             }
