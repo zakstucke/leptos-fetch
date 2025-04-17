@@ -30,6 +30,7 @@ QueryClient::new()
     - `prefetch_local_query` -> `prefetch_query_local`
     - `fetch_local_query` -> `fetch_query_local`
     - `set_local_query` -> `set_query_local`
+- `QueryClient::invalidate_query_type` renamed `QueryClient::invalidate_query_scope` ([#24](https://github.com/zakstucke/leptos-fetch/pull/24))
 - MSRV increased to `1.85` to migrate to edition 2024 and use async closures ([#19](https://github.com/zakstucke/leptos-fetch/pull/19))
 
 ### Added
@@ -59,7 +60,7 @@ QueryClient::new()
 - `keyer` reactive args to resources, subscriptions etc now support `Option<K>` as output natively, making the usecase of an initially disabled resource much more seamless (([#21](https://github.com/zakstucke/leptos-fetch/pull/21)))
 
 ### Fixed
-- Fixed bug in `invalidate_query_type()` and `invalidate_all_queries()` to correctly invalidate active resources ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
+- Fixed bug in `invalidate_query_scope()` and `invalidate_all_queries()` to correctly invalidate active resources ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time` ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - Workaround leptos bug with `ArcLocalResource` until they release a new version ([#5](https://github.com/zakstucke/leptos-fetch/pull/5))
 

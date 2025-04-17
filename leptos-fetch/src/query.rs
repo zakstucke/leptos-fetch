@@ -10,7 +10,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
-    query_scope::{QueryTypeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, ScopeCacheKey},
     safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
@@ -157,7 +157,7 @@ impl<K, V> Query<K, V> {
     pub fn new(
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
-        query_type_info: &QueryTypeInfo,
+        query_scope_info: &QueryScopeInfo,
         key_hash: KeyHash,
         key: MaybeLocal<K>,
         value: MaybeLocal<V>,
@@ -174,7 +174,7 @@ impl<K, V> Query<K, V> {
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let cache_key = query_type_info.cache_key;
+        let cache_key = query_scope_info.cache_key;
         let combined_options = options_combine(client_options, scope_options);
         let active_resources =
             active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
@@ -201,10 +201,10 @@ impl<K, V> Query<K, V> {
             && combined_options.refetch_interval().is_some()
         {
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
-            let query_type_info = query_type_info.clone();
+            let query_scope_info = query_scope_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 scope_lookup.with_cached_scope_mut::<K, V, _>(
-                    &query_type_info,
+                    &query_scope_info,
                     false,
                     |maybe_scope| {
                         // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:

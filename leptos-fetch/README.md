@@ -212,12 +212,12 @@ The [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.Que
 
 [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by calling it with [`QueryClient::set_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_options).
 
-Options can also be applied to individual query types by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
+Options can also be applied to individual query scopes by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
 
-**NOTE: query types are separated based on the unique identity of the function (or closure) provided to both query scopes, and those directly provided to a [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html)..**
-> If you pass different closures, even with the same arguments, they will be treated as unique query types.
+**NOTE: query scopes are separated based on the unique identity of the function (or closure) provided to both query scopes, and those directly provided to a [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html)..**
+> If you pass different closures, even with the same arguments, they will be treated as unique query scopes.
 
-Query type specific [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) will be combined with the global [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) set on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), with the local options taking precedence when both have a value set.
+Query scope specific [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) will be combined with the global [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) set on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), with the local options taking precedence when both have a value set.
 
 ```rust
 use std::time::Duration;

@@ -67,7 +67,7 @@ macro_rules! define {
     ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident, $sname:literal, $sthread:literal) => {
         /// A
         #[doc = $sthread]
-        /// wrapper for a query function. This can be used to add specific [`QueryOptions`] to only apply to one query type.
+        /// wrapper for a query function. This can be used to add specific [`QueryOptions`] to only apply to one query scope.
         ///
         /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
         ///
@@ -124,7 +124,7 @@ macro_rules! define {
                     }
                 }
 
-                /// Set specific [`QueryOptions`] to only apply to this query type.
+                /// Set specific [`QueryOptions`] to only apply to this query scope.
                 ///
                 /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
                 pub fn set_options(mut self, options: QueryOptions) -> Self {
@@ -389,7 +389,7 @@ define! { [+ Send], [+ Send + Sync], QueryScope, "QueryScope", "threadsafe" }
 define! { [], [], QueryScopeLocal, "QueryScopeLocal", "non-threadsafe" }
 
 #[derive(Debug, Clone)]
-pub(crate) struct QueryTypeInfo {
+pub(crate) struct QueryScopeInfo {
     pub options: Option<QueryOptions>,
     pub cache_key: ScopeCacheKey,
     #[cfg(any(
@@ -399,7 +399,7 @@ pub(crate) struct QueryTypeInfo {
     pub title: Arc<String>,
 }
 
-impl QueryTypeInfo {
+impl QueryScopeInfo {
     #[track_caller]
     pub fn new<K, V, M>(query_scope: &impl QueryScopeTrait<K, V, M>) -> Self
     where
