@@ -111,7 +111,7 @@ pub fn prepare(client: QueryClient) -> CacheRep {
                 let value_set_updated_or_removed_signal = scope_subscriptions_mut
                     .add_value_set_updated_or_removed_subscription(
                         query_info.cache_key,
-                        MaybeLocal::new(ArcSignal::derive(move || query_info.key_hash)),
+                        MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
                         query_info.v_type_id,
                     );
 
@@ -150,7 +150,7 @@ pub fn prepare(client: QueryClient) -> CacheRep {
 
                 let events = scope_subscriptions_mut.add_events_subscription(
                     query_info.cache_key,
-                    MaybeLocal::new(ArcSignal::derive(move || query_info.key_hash)),
+                    MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
                 );
 
                 let is_invalidated = {
@@ -177,13 +177,13 @@ pub fn prepare(client: QueryClient) -> CacheRep {
                 let is_fetching = {
                     scope_subscriptions_mut.add_is_fetching_subscription(
                         query_info.cache_key,
-                        MaybeLocal::new(ArcSignal::derive(move || query_info.key_hash)),
+                        MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
                     )
                 };
                 let is_loading = {
                     scope_subscriptions_mut.add_is_loading_subscription(
                         query_info.cache_key,
-                        MaybeLocal::new(ArcSignal::derive(move || query_info.key_hash)),
+                        MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
                     )
                 };
                 let is_stale = {
@@ -249,7 +249,7 @@ pub fn prepare(client: QueryClient) -> CacheRep {
                     value_derivs: value_derivs.clone(),
                     active_resources: scope_subscriptions_mut.add_active_resources_subscription(
                         query_info.cache_key,
-                        MaybeLocal::new(ArcSignal::derive(move || query_info.key_hash)),
+                        MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
                     ),
                     events,
                 };

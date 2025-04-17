@@ -17,6 +17,7 @@ mod events;
 mod maybe_local;
 mod query;
 mod query_client;
+mod query_maybe_key;
 mod query_options;
 mod query_scope;
 mod resource_drop_guard;
@@ -1182,6 +1183,71 @@ mod test {
                     client,
                     fetcher.clone(),
                     || 2,
+                    resource_type,
+                    arc
+                );
+            })
+            .await;
+    }
+
+    /// Make sure resources reload when queries invalidated correctly.
+    #[rstest]
+    #[tokio::test]
+    async fn test_optional_key(
+        #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
+        #[values(false, true)] arc: bool,
+        #[values(false, true)] server_ctx: bool,
+    ) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (fetcher, fetch_calls) = default_fetcher();
+                let (client, _guard, _owner) = prep_vari!(server_ctx);
+
+                let key_value = RwSignal::new(None);
+                let keyer = move || key_value.get();
+
+                macro_rules! check {
+                    ($get_resource:expr) => {{
+                        // // TODO enable these on 0.8 now SendWrapper sorted:
+                        // let resource = $get_resource();
+                        // assert_eq!(resource.get_untracked(), Some(None));
+                        // assert_eq!(resource.try_get_untracked(), Some(Some(None)));
+
+                        // On the server cannot actually run local resources:
+                        if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
+                            assert_eq!($get_resource().await, None);
+
+                            let sub_is_loading =
+                                client.subscribe_is_loading(fetcher.clone(), keyer);
+                            let sub_is_fetching =
+                                client.subscribe_is_fetching(fetcher.clone(), keyer);
+                            let sub_value = client.subscribe_value(fetcher.clone(), keyer);
+
+                            assert_eq!(sub_is_loading.get_untracked(), false);
+                            assert_eq!(sub_is_fetching.get_untracked(), false);
+                            assert_eq!(sub_value.get_untracked(), None);
+
+                            key_value.set(Some(2));
+                            tick!();
+
+                            assert_eq!(sub_is_loading.get_untracked(), true);
+                            assert_eq!(sub_is_fetching.get_untracked(), true);
+
+                            assert_eq!($get_resource().await, Some(4));
+                            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                            assert_eq!(sub_value.get_untracked(), Some(4));
+                            assert_eq!(sub_is_loading.get_untracked(), false);
+                            assert_eq!(sub_is_fetching.get_untracked(), false);
+                        }
+                    }};
+                }
+
+                vari_new_resource_with_cb!(
+                    check,
+                    client,
+                    fetcher.clone(),
+                    keyer,
                     resource_type,
                     arc
                 );

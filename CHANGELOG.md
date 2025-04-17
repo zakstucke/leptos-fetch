@@ -55,6 +55,7 @@ QueryClient::new()
 - Added `subscribe_is_fetching()`, `arc_subscribe_is_fetching()`, `subscribe_is_loading()`, `arc_subscribe_is_loading()` methods to the `QueryClient` for monitoring query activity ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - Improved README ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))
 - Sped up CI (([#6](https://github.com/zakstucke/leptos-fetch/pull/6)))
+- `keyer` reactive args to resources, subscriptions etc now support `Option<K>` as output natively, making the usecase of an initially disabled resource much more seamless (([#21](https://github.com/zakstucke/leptos-fetch/pull/21)))
 
 ### Fixed
 - Fixed bug in `invalidate_query_type()` and `invalidate_all_queries()` to correctly invalidate active resources ([#3](https://github.com/zakstucke/leptos-fetch/pull/3))

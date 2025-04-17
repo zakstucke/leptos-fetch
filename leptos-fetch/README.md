@@ -19,6 +19,7 @@ LF provides:
 - Memory management with cache lifetimes
 - Optimistic updates
 - Debugging tools
+- Optional resources
 - Declarative query interaction as a supplement to leptos resources
 - In `ssr`, custom stream encoding at a global level
 
@@ -85,8 +86,8 @@ pub fn App() -> impl IntoView {
     // Provides the Query Client for the entire app via leptos context.
     QueryClient::new().provide();
     
-    // QueryClient::set_options(QueryOptions::new()..) can customize default behaviour.
-    // QueryClient::set_codec::<Codec>() can be used to change the codec for streaming in ssr.
+    // client.set_options(QueryOptions::new()..) can customize default behaviour.
+    // client.set_codec::<Codec>() can be used to change the codec for streaming in ssr.
 
     // Rest of App...
 }
@@ -135,7 +136,7 @@ fn TrackView(id: i32) -> impl IntoView {
                 {move || Suspend::new(async move {
                     let track = resource.await;
                     view! { <h2>{track}</h2> }
-                })}          
+                })}
            </Transition>
        </div>
     }
@@ -145,6 +146,20 @@ fn TrackView(id: i32) -> impl IntoView {
 async fn get_track(id: i32) -> String {
     todo!()
 }
+```
+
+The reactive keyer argument supports returning `Option<K>`, which prevents the need to wrap `get_track` in an outer function that takes `Option<i32>` as an id. This is a really powerful pattern for "optional resources":
+```rust,no_run
+use leptos::prelude::*;
+use leptos_fetch::QueryClient;
+
+async fn get_track(id: i32) -> String {
+    todo!()
+}
+
+let value = RwSignal::new(None);
+QueryClient::new().resource(get_track, move || value.get());
+value.set(Some(1));
 ```
 
 ### Devtools
@@ -162,7 +177,7 @@ If you need the devtools component in release mode too, you can use the `devtool
 cargo add leptos-fetch --feature devtools
 ```
 
-```rust,ignore
+```rust,no_run
 use leptos::*;
 use leptos_fetch::{QueryClient, QueryDevtools};
 #[component]

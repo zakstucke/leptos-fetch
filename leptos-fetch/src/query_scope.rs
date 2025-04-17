@@ -125,21 +125,17 @@ macro_rules! define {
                 }
             }
 
-            /// Coercer trait, ignore.
             pub trait [<$name Trait>] <K, V, M>
             where
                 K: 'static,
                 V: 'static,
              {
-                /// Coercer trait, ignore.
                 fn options(&self) -> Option<QueryOptions> {
                     Default::default()
                 }
 
-                /// Coercer trait, ignore.
                 fn cache_key(&self) -> TypeId;
 
-                /// Coercer trait, ignore.
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static;
 
                 #[cfg(any(
