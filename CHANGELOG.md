@@ -45,6 +45,7 @@ QueryClient::new()
 - Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
 - Subscription bugs ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
 - Fixed edge case where 2 scopes with different options would be treated the same ([#22](https://github.com/zakstucke/leptos-fetch/pull/22))
+- Improved threadsafety edgecases ([#25](https://github.com/zakstucke/leptos-fetch/pull/25))
 
 ### Tests
 - Sped up CI with erase_components ([#17](https://github.com/zakstucke/leptos-fetch/pull/17))
