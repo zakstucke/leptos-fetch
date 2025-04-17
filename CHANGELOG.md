@@ -52,6 +52,11 @@ QueryClient::new()
 
 ---
 
+## [0.4.0-beta](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.0-beta)
+
+### Added
+- Upgrade to `leptos-0.8.0-beta` ([#7](https://github.com/zakstucke/leptos-fetch/pull/7))
+
 ## [0.3.1](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.3.1)
 
 ### Added

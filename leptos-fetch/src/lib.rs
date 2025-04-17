@@ -1317,17 +1317,10 @@ mod test {
 
                             // Because it should now be stale, not gc'd,
                             // sync fns on a new resource instance should still return the new value, it just means a background refresh has been triggered:
-                            // TODO update in 0.8 once can test output of LocalResource without the SendWrapper:
-                            let resource2 = client.resource(fetcher.clone(), || 2);
+                            let resource2 = $get_resource();
+                            tick!();
                             assert_eq!(resource2.get_untracked(), Some(4));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                            // macro_rules! check2 {
-                            //     (resource2:expr) => {{
-                            //         assert_eq!(*&resource2.get_untracked(), Some(4));
-                            //         assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                            //     }};
-                            // }
-                            // vari_new_resource_with_cb!(check2, client, fetcher.clone(), || 2, resource_type, arc);
 
                             // Because the resource should've been auto invalidated, a tick should cause it to auto refetch:
                             tick!();
@@ -1383,7 +1376,7 @@ mod test {
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
-                            assert_eq!(resource.await, 2);
+                            let resource = $get_resource();
                             assert_eq!($get_resource().await, 2);
                             assert_eq!(subscribed.get_untracked(), Some(2));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
@@ -1393,20 +1386,18 @@ mod test {
 
                             // Until the new fetch has completed, the old should still be returned:
                             tick!();
-                            // TODO remove the local resource once 0.8 if check here and switch these checks to .get() from .await, as we're really trying to test lifecycle.
-                            // seems there's a different future/.await handling between local and normal resources that breaks the test but not actually important.
-                            if resource_type != ResourceType::Local {
-                                assert_eq!($get_resource().await, 2);
-                                assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(subscribed.get_untracked(), Some(2));
-                            }
+                            assert_eq!(resource.get(), Some(2));
+                            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             // Wait for the new to complete:
-                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                DEFAULT_FETCHER_MS + 10,
+                            ))
+                            .await;
                             tick!();
 
                             // Should have updated to the new value:
-                            assert_eq!($get_resource().await, 4);
+                            assert_eq!(resource.get(), Some(4));
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(subscribed.get_untracked(), Some(4));
