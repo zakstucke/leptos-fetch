@@ -10,7 +10,7 @@ use crate::{
     cache::ScopeLookup,
     maybe_local::MaybeLocal,
     query_scope::ScopeCacheKey,
-    utils::{new_subscription_id, new_value_modified_id, KeyHash},
+    utils::{KeyHash, new_subscription_id, new_value_modified_id},
 };
 
 // cache_key -> sub_id -> Sub
