@@ -173,6 +173,24 @@ impl<Codec: 'static> QueryClient<Codec> {
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
+        self.arc_local_resource(query_scope, keyer).into()
+    }
+
+    /// Query with [`ArcLocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
+    ///
+    /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
+    #[track_caller]
+    pub fn arc_local_resource<K, MaybeKey, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
+        keyer: impl Fn() -> MaybeKey + 'static,
+    ) -> ArcLocalResource<MaybeKey::MappedValue>
+    where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        MaybeKey: QueryMaybeKey<K, V>,
+        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
         let client = *self;
         let client_options = self.options();
         let scope_lookup = self.scope_lookup;
@@ -185,7 +203,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         // To call .mark_resource_dropped() when the resource is dropped:
         let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
 
-        LocalResource::new({
+        ArcLocalResource::new({
             move || {
                 let query_scope = query_scope.clone();
                 let query_scope_info = query_scope_info.clone();
@@ -249,27 +267,6 @@ impl<Codec: 'static> QueryClient<Codec> {
                 }
             }
         })
-    }
-
-    /// Query with [`ArcLocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
-    ///
-    /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
-    #[track_caller]
-    pub fn arc_local_resource<K, MaybeKey, V, M>(
-        &self,
-        query_scope: impl QueryScopeLocalTrait<K, V, M> + 'static,
-        keyer: impl Fn() -> MaybeKey + 'static,
-    ) -> ArcLocalResource<MaybeKey::MappedValue>
-    where
-        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
-        MaybeKey: QueryMaybeKey<K, V>,
-        MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
-        V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {
-        // TODO on next 0.7 + 0.8 release, switch back to the arc as the base not the signal one:
-        // https://github.com/leptos-rs/leptos/pull/3740
-        // https://github.com/leptos-rs/leptos/pull/3741
-        self.local_resource(query_scope, keyer).into()
     }
 
     /// Query with [`Resource`].
@@ -530,7 +527,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         );
 
         // On the client, want to repopulate the frontend cache, so should write resources to the cache here if they don't exist.
-        // TODO it would be better if in here we could check if the resource was started on the backend/streamed, saves doing most of this if already a frontend resource.
+        // It would be better if in here we could check if the resource was started on the backend/streamed, saves doing most of this if already a frontend resource.
         let effect = {
             let resource = resource.clone();
             let buster_if_uncached = buster_if_uncached.clone();
@@ -1386,7 +1383,6 @@ impl<Codec: 'static> QueryClient<Codec> {
             );
 
         let scope_lookup = self.scope_lookup;
-        // TODO switch these around and have ArcSignal as the base case once upstreamed.
         Signal::derive_local(move || {
             dyn_signal.track();
             if let Some(key_signal) = keyer.value_if_safe() {

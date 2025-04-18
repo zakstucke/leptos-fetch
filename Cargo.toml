@@ -14,10 +14,10 @@ readme = "./leptos-fetch/README.md"
 rust-version = "1.85"
 
 [workspace.dependencies]
-any_spawner = "0.2"
+any_spawner = "0.3.0-rc1"
 hydration_context = "0.3"
 codee = "0.3"
-leptos = "0.8.0-beta" # 0.8.0-alpha
+leptos = { version = "0.8.0-rc1" }
 
 chrono = "0.4"
 chrono-humanize = { version = "0.2" }
@@ -27,3 +27,10 @@ parking_lot = "0.12"
 send_wrapper = "0.6"
 web-sys = { version = "0.3", features = ["DomRect"] }
 tracing = "0.1"
+
+# TODO: remove:
+[patch.crates-io]
+leptos = { git = "https://github.com/zakstucke/leptos", rev = "3fd8781afc7298b33847b77bfc9fa0c0d89f3679" }
+any_spawner = { git = "https://github.com/zakstucke/leptos", rev = "3fd8781afc7298b33847b77bfc9fa0c0d89f3679" }
+hydration_context = { git = "https://github.com/zakstucke/leptos", rev = "3fd8781afc7298b33847b77bfc9fa0c0d89f3679" }
+leptos_axum = { git = "https://github.com/zakstucke/leptos", rev = "3fd8781afc7298b33847b77bfc9fa0c0d89f3679" }

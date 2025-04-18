@@ -56,9 +56,12 @@ mod test {
         PinnedFuture, PinnedStream, SerializedDataId, SharedContext, SsrSharedContext,
     };
 
-    use leptos::{error::ErrorId, prelude::*, task::Executor};
+    use any_spawner::Executor;
+    use leptos::{error::ErrorId, prelude::*};
 
     use rstest::*;
+
+    use crate::utils::OnDrop;
 
     use super::*;
 
@@ -693,8 +696,10 @@ mod test {
                     ($body:block) => {{
                         let tmp_owner = owner.child();
                         tmp_owner.set();
-                        $body
+                        let result = $body;
+                        tmp_owner.unset();
                         owner.set();
+                        result
                     }};
                 }
 
@@ -766,6 +771,59 @@ mod test {
             .await;
     }
 
+    /// Leptos sometimes breaks drop semantics for local/nonlocal signals,
+    /// this was the testcase that catches it and is simpler to identify than inside other tests.
+    #[rstest]
+    #[tokio::test]
+    async fn test_drop_semantics(#[values(false, true)] local: bool) {
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let owner = Owner::default();
+
+                macro_rules! with_tmp_owner {
+                    ($body:block) => {{
+                        let tmp_owner = owner.child();
+                        tmp_owner.set();
+                        let result = $body;
+                        tmp_owner.unset();
+                        owner.set();
+                        result
+                    }};
+                }
+
+                let dropped = with_tmp_owner! {{
+                    let dropped = Arc::new(AtomicBool::new(false));
+                    let on_drop = Arc::new(OnDrop::new({
+                        let dropped = dropped.clone();
+                        move || {
+                            dropped.store(true, Ordering::Relaxed);
+                    }}));
+                    if local {
+                        ArenaItem::<_, SyncStorage>::new_with_storage(ArcAsyncDerived::new_unsync(
+                            move || {
+                                let _on_drop = on_drop.clone();
+                                async move {
+                                }
+                            })
+                        );
+                    } else {
+                        ArenaItem::<_, SyncStorage>::new_with_storage(ArcAsyncDerived::new(
+                            move || {
+                                let _on_drop = on_drop.clone();
+                                async move {
+                                }
+                            })
+                        );
+                    }
+                    assert!(!dropped.load(Ordering::Relaxed));
+                    dropped
+                }};
+                tick!();
+                assert!(dropped.load(Ordering::Relaxed));
+            })
+            .await;
+    }
+
     /// Make sure the cache is cleaned up at the expected time, and only do so once no resources are using it.
     #[rstest]
     #[tokio::test]
@@ -799,8 +857,10 @@ mod test {
                     ($body:block) => {{
                         let tmp_owner = owner.child();
                         tmp_owner.set();
-                        $body
+                        let result = $body;
+                        tmp_owner.unset();
                         owner.set();
+                        result
                     }};
                 }
 
@@ -1210,10 +1270,9 @@ mod test {
 
                 macro_rules! check {
                     ($get_resource:expr) => {{
-                        // // TODO enable these on 0.8 now SendWrapper sorted:
-                        // let resource = $get_resource();
-                        // assert_eq!(resource.get_untracked(), Some(None));
-                        // assert_eq!(resource.try_get_untracked(), Some(Some(None)));
+                        let resource = $get_resource();
+                        assert_eq!(resource.get_untracked().flatten(), None);
+                        assert_eq!(resource.try_get_untracked().flatten().flatten(), None);
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
@@ -1363,7 +1422,8 @@ mod test {
                 macro_rules! check {
                     ($get_resource:expr) => {{
                         let resource = $get_resource();
-                        let subscribed = client.subscribe_value(fetcher.clone(), move || add_size.get());
+                        let subscribed =
+                            client.subscribe_value(fetcher.clone(), move || add_size.get());
 
                         // Should be None initially with the sync methods:
                         assert!(resource.get_untracked().is_none());
