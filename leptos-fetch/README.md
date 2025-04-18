@@ -6,7 +6,7 @@
 ![Crates.io MSRV](https://img.shields.io/crates/msrv/leptos-fetch)
 [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/zakstucke/leptos-fetch/rust.yml?branch=main&style=for-the-badge" height="20">](https://github.com/zakstucke/leptos-fetch/actions?query=branch%3Amain)
 
-Leptos Fetch is an async state management library for [Leptos](https://github.com/leptos-rs/leptos). LF is a refined and enhanced successor to [Leptos Query](https://github.com/gaucho-labs/leptos-query), following a year of inactivity.
+Leptos Fetch is an async state management library for [Leptos](https://github.com/leptos-rs/leptos). LF is a refined and enhanced successor to [Leptos Query](https://github.com/gaucho-labs/leptos-fetch), following a year of inactivity.
 
 **PR's for bugfixes, documentation, performance, features and examples are very welcome!**
 
@@ -18,7 +18,10 @@ LF provides:
 - Refetch intervals
 - Memory management with cache lifetimes
 - Optimistic updates
+- Debugging tools
+- Optional resources
 - Declarative query interaction as a supplement to leptos resources
+- In `ssr`, custom stream encoding at a global level
 
 ### How's this different from a Leptos Resource?
 
@@ -36,7 +39,9 @@ LF also allows you to interact declaratively with queries outside resources, sub
 - [Query Options](#query-options)
 - [Declarative Query Interactions](#declarative-query-management)
 - [Subscriptions](#subscriptions)
-- [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Thread Local & Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
+- [Pagination & Infinite Queries](#pagination-and-infinite-queries)
 
 ## Installation
 
@@ -71,7 +76,7 @@ ssr = [
 
 ## Quick Start
 
-In the root of your App, provide a query client with [`QueryClient::provide`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide) or [`QueryClient::provide_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide_with_options) if you want to override the default options.
+In the root of your App, create a query client with [`QueryClient::new`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.new) then call [`QueryClient::provide`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide) to store in leptos context.
 
 ```rust
 use leptos::prelude::*;
@@ -80,9 +85,10 @@ use leptos_fetch::QueryClient;
 #[component]
 pub fn App() -> impl IntoView {
     // Provides the Query Client for the entire app via leptos context.
-    QueryClient::provide();
+    QueryClient::new().provide();
     
-    // QueryClient::provide_with_options(QueryOptions::new()..) can customize default behaviour.
+    // client.set_options(QueryOptions::new()..) can customize default behaviour.
+    // client.set_codec::<Codec>() can be used to change the codec for streaming in ssr.
 
     // Rest of App...
 }
@@ -91,8 +97,13 @@ pub fn App() -> impl IntoView {
 Any async function can be used as a query:
 
 ```rust
-/// The query function.
+/// The query function
 async fn get_track(id: i32) -> String {
+    todo!()
+}
+
+/// If no key argument, treated as ()
+async fn get_theme() -> String {
     todo!()
 }
 ```
@@ -106,11 +117,10 @@ use leptos_fetch::QueryClient;
 #[component]
 fn TrackView(id: i32) -> impl IntoView {
     // Usually at the root of the App:
-    QueryClient::provide();
+    QueryClient::new().provide();
 
     // Extract the root client from leptos context,
-    // this is identical to expect_context::<QueryClient>()
-    let client = QueryClient::expect();
+    let client: QueryClient = expect_context();
     
     // Native leptos resources are returned, 
     // there are also variants for local, blocking, arc resources. 
@@ -127,7 +137,7 @@ fn TrackView(id: i32) -> impl IntoView {
                 {move || Suspend::new(async move {
                     let track = resource.await;
                     view! { <h2>{track}</h2> }
-                })}          
+                })}
            </Transition>
        </div>
     }
@@ -138,6 +148,55 @@ async fn get_track(id: i32) -> String {
     todo!()
 }
 ```
+
+The reactive keyer argument supports returning `Option<K>`, which prevents the need to wrap `get_track` in an outer function that takes `Option<i32>` as an id. This is a really powerful pattern for "optional resources":
+```rust,no_run
+use leptos::prelude::*;
+use leptos_fetch::QueryClient;
+
+async fn get_track(id: i32) -> String {
+    todo!()
+}
+
+let value = RwSignal::new(None);
+QueryClient::new().resource(get_track, move || value.get());
+value.set(Some(1));
+```
+
+### Devtools
+<p align="start">
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_modal.jpg" alt="Devtools Modal"/>
+</p>
+
+[`QueryDevtools`](https://docs.rs/leptos-fetch/latest/leptos_fetch/fn.QueryDevtools.html) is provided to help visualize all of the inner workings of Leptos Fetch and will likely save a bunch of tedious debugging!
+
+To enable, the `devtools` feature must be added, the component won't be shown or included in the binary when you build your app in release mode for performance.
+
+If you need the devtools component in release mode too, you can use the `devtools-always` feature instead.
+
+```bash
+cargo add leptos-fetch --feature devtools
+```
+
+```rust,no_run
+use leptos::*;
+use leptos_fetch::{QueryClient, QueryDevtools};
+#[component]
+fn App() -> impl IntoView {
+   let client = QueryClient::new().provide();
+    view!{
+        // This will render the devtools as a small widget in the bottom-right of the screen, 
+        // this will only show in development mode.
+        <QueryDevtools client=client />
+        // Rest of App...
+    }
+}
+```
+
+In the bottom right of the screen, this widget should appear and be clickable to open the devtools:
+<p align="start">
+    <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_widget.jpg" alt="Devtools widget"/>
+</p>
 
 ## Query Options
 
@@ -152,28 +211,30 @@ The [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.Que
 **NOTE: `stale_time` can never be greater than `gc_time`.**
 > If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time`.
 
-[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by creating it with [`QueryClient::new_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.new_with_options) or [`QueryClient::provide_with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.provide_with_options).
+[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by calling it with [`QueryClient::set_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_options).
 
-Options can also be applied to individual query types by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
+Options can also be applied to individual query scopes by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
 
-**NOTE: query types are separated based on the unique identity of the function (or closure) provided to both query scopes, and those directly provided to a [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html)..**
-> If you pass different closures, even with the same arguments, they will be treated as unique query types.
+**NOTE: query scopes are separated based on the unique identity of the function (or closure) provided to both query scopes, and those directly provided to a [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html)..**
+> If you pass different closures, even with the same arguments, they will be treated as unique query scopes.
 
-Query type specific [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) will be combined with the global [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) set on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), with the local options taking precedence when both have a value set.
+Query scope specific [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) will be combined with the global [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) set on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), with the local options taking precedence when both have a value set.
 
 ```rust
 use std::time::Duration;
+
 use leptos_fetch::{QueryClient, QueryScope, QueryOptions};
+use leptos::prelude::*;
 
 // A QueryScope/QueryScopeLocal can be used just like the function directly in QueryClient methods.
 fn track_query() -> QueryScope<i32, String> {
-    QueryScope::new(
-        get_track, 
-        QueryOptions::new()
-            .set_stale_time(Duration::from_secs(10))
-            .set_gc_time(Duration::from_secs(60))
-            .set_refetch_interval(Duration::from_secs(10))
-    )
+    QueryScope::new(get_track)
+        .set_options(
+            QueryOptions::new()
+                .set_stale_time(Duration::from_secs(10))
+                .set_gc_time(Duration::from_secs(60))
+                .set_refetch_interval(Duration::from_secs(10))
+        )
 }
 
 /// The query function.
@@ -182,18 +243,18 @@ async fn get_track(id: i32) -> String {
 }
 
 fn foo() {
-    let client = QueryClient::expect();
+    let client: QueryClient = expect_context();
     let resource = client.resource(track_query(), || 2);
 }
 ```
 
 ## Declarative Query Interactions
 
-Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
+Resources are just one way to load and interact with queries. The [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) allows you to [prefetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.prefetch_query), [fetch](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query), [set](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_query), [update](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query), [update async](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async), [check if exists](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.query_exists) and [invalidate queries](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) declaratively, where any changes will automatically update active resources.
 
 ### Query Invalidation
 
-Sometimes you can't wait for a query to become stale before you refetch it. [`QueryClient::invalidated_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) and friends allow you to intelligently mark queries as stale and potentially refetch them too.
+Sometimes you can't wait for a query to become stale before you refetch it. [`QueryClient::invalidate_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_query) and friends allow you to intelligently mark queries as stale and potentially refetch them too.
 
 When a query is invalidated, the following happens:
 
@@ -210,13 +271,121 @@ Subscriptions allow you to reactively respond to a query's lifecycle outside of 
 
 - [`QueryClient::subscribe_is_loading`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.subscribe_is_loading) returns a `Signal<bool>` which reactively updates to `true` whenever a query is being fetched for the first time, i.e. stale data was not already in the cache. This could be used to e.g. show something before the data is ready, without having to use a fallback with the leptos `Transition` or `Suspense` components.
 
+- [`QueryClient::subscribe_value`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.subscribe_value) returns a `Signal<Option<V>>` that subscribes to the value of a query. This can be useful to react to a query value in the cache, but not prevent it being garbage collected, or trigger fetching when missing.
+
 ## Thread Local and Threadsafe Variants
 If using SSR, some resources will initially load on the server, in this case multiple threads are in use. 
 
-To prevent needing all types to be `Sync` + `Send`, `_local()` variants of many functions exist that do not require `Send` + `Sync`. `_local()` variants also will not stream from the server to the client in `ssr`, therefore do not need `serde` implementations.
+To prevent needing all types to be `Sync` + `Send`, `_local()` variants of many functions exist that do not require `Send` + `Sync`. `_local()` variants also will not stream from the server to the client in `ssr`, therefore do not need to implement codec traits.
 
 This is achieved by internally utilising a threadsafe cache, alongside a local cache per thread, abstracting this away to expose a singular combined cache. 
 
 The public API will only provide access to cache values that are either threadsafe, or created on the current thread, and this distinction should be completely invisible to a user.
+
+## Custom Streaming Codecs
+
+**Applies to `ssr` only**
+
+It's possible to use non-json codecs for streaming leptos resources from the backend.
+The default is [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html).
+
+The current `codee` major version is `0.3` and will need to be imported in your project to customize the codec.
+
+E.g. to use [`codee::binary::MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html): 
+```toml
+codee = { version = "0.3", features = ["msgpack_serde"] }
+```
+
+[`MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html) will become a generic type on the [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html), so when calling [`expect_context`](https://docs.rs/leptos/latest/leptos/prelude/fn.expect_context.html),
+this type must be specified when not using the default.
+
+A useful pattern is to type alias the client with the custom codec for your whole app:
+
+```rust,no_run
+use codee::binary::MsgpackSerdeCodec;
+use leptos::prelude::*;
+use leptos_fetch::QueryClient;
+
+type MyQueryClient = QueryClient<MsgpackSerdeCodec>;
+
+// Create and provide to context to make accessible everywhere:
+QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
+
+let client: MyQueryClient = expect_context();
+```
+
+## Pagination and Infinite Queries
+
+Pagination can be achieved simply with basic primitives:
+```rust,no_run
+use leptos::prelude::*;
+
+#[derive(Clone, Debug)]
+struct Page;
+
+async fn get_page(page_index: usize) -> Page {
+    Page
+}
+
+let client = leptos_fetch::QueryClient::new();
+
+// Initial page is 0:
+let active_page_index = RwSignal::new(0);
+
+// The resource is reactive over the active_page_index signal:
+let resource = client.local_resource(get_page, move || active_page_index.get());
+
+// Update the page to 1:
+active_page_index.set(1);
+```
+
+Likewise with infinite queries, the [`QueryClient::update_query_async`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async) makes it easy with a single cache key:
+
+```rust,no_run
+use leptos::prelude::*;
+
+#[derive(Clone, Debug)]
+struct InfiniteItem(usize);
+
+#[derive(Clone, Debug)]
+struct InfiniteList {
+    items: Vec<InfiniteItem>,
+    offset: usize,
+    more_available: bool,
+}
+
+async fn get_list_items(offset: usize) -> Vec<InfiniteItem> {
+    (offset..offset + 10).map(InfiniteItem).collect()
+}
+
+async fn get_list_query(_key: ()) -> InfiniteList {
+    let items = get_list_items(0).await;
+    InfiniteList {
+        offset: items.len(),
+        more_available: !items.is_empty(),
+        items,
+    }
+}
+
+let client = leptos_fetch::QueryClient::new();
+
+// Initialise the query with the first load.
+// we're not using a reactive key here for extending the list, but declarative updates instead.
+let resource = client.local_resource(get_list_query, || ());
+
+async {
+    // When wanting to load more items, update_query_async can be called declaratively to update the cached item and resource:
+    client
+        .update_query_async(get_list_query, (), async |last| {
+            if last.more_available {
+                let next_items = get_list_items(last.offset).await;
+                last.offset += next_items.len();
+                last.more_available = !next_items.is_empty();
+                last.items.extend(next_items);
+            }
+        })
+        .await;
+};
+```
 
 <!-- cargo-rdme end -->

@@ -1,1 +1,5 @@
-/target
+target
+.DS_Store
+bun.lock
+node_modules
+package-lock.json

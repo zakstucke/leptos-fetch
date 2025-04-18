@@ -10,6 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "--cfg erase_components"
 
 jobs:
   build-and-test:
@@ -27,17 +28,20 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-hack
+        run: cargo install cargo-hack --locked
+
       - name: Check formatting
         run: cargo fmt --all --check
 
-      - name: Run Tests Client
-        run: cargo test --all
+      - name: Run Lib Tests
+        run: cargo hack test --lib --feature-powerset
 
-      - name: Run Tests SSR
-        run: cargo test --all --features ssr
+      - name: Run All Tests and Examples
+        run: cargo test --all --all-features
 
       - name: Build wasm
-        run: cargo build --target wasm32-unknown-unknown
+        run: cargo hack build --feature-powerset --exclude-features=ssr --target wasm32-unknown-unknown
 
       - name: Run Clippy
-        run: cargo clippy --all-targets -- -D warnings        
+        run: cargo hack clippy --lib --feature-powerset --all-targets -- -D warnings
