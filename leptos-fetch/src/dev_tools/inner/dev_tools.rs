@@ -350,12 +350,16 @@ fn FallbackLogo(open: RwSignal<bool>) -> impl IntoView {
                 )
             }>
                 <button
-                    on:click=move |_| open.set(true)
+                    on:click=move |_| {
+                        open.try_set(true);
+                    }
                     class="lq-bg-zinc-200 text-lq-foreground lq-rounded-full lq-w-12 lq-h-12 hover:-lq-translate-y-1 hover:lq-bg-zinc-300 lq-transition-all lq-duration-200"
                     inner_html=include_str!("logo.svg")
                 ></button>
                 <button
-                    on:click=move |_| toggle_left.update(|v| *v = !*v)
+                    on:click=move |_| {
+                        toggle_left.try_update(|v| *v = !*v);
+                    }
                     class="lq-bg-lq-background lq-text-lq-foreground lq-rounded-sm lq-w-4 lq-h-4 lq-transition-colors lq-duration-200 hover:lq-bg-lq-border"
                 >
                     <svg
@@ -387,7 +391,9 @@ fn CloseButton() -> impl IntoView {
 
     view! {
         <button
-            on:click=move |_| open.set(false)
+            on:click=move |_| {
+                open.try_set(false);
+            }
             class="lq-bg-lq-background lq-text-lq-foreground lq-rounded-t-sm lq-w-6 lq-h-6 lq-p-1 lq-transition-colors lq-hover:bg-lq-accent"
         >
             <svg
@@ -666,8 +672,9 @@ fn CaretSwitch(open: RwSignal<bool>) -> impl IntoView {
         <button
             class="lq-text-lq-foreground lq-bg-lq-input lq-p-1 lq-rounded-md lq-transition-colors lq-duration-200 hover:lq-bg-lq-border"
             on:click=move |_| {
-                let mut guard = open.write();
-                *guard = !*guard;
+                if let Some(mut guard) = open.try_write() {
+                    *guard = !*guard;
+                }
             }
         >
             <svg
@@ -810,10 +817,10 @@ fn QueryRow(cache_key: ScopeCacheKey, key_hash: KeyHash, query: QueryRep) -> imp
             on:click={
                 let selected_query = selected_query.clone();
                 move |_| {
-                    if is_selected.get_untracked() {
+                    if is_selected.try_get_untracked() == Some(true) {
                         selected_query.set(None);
                     } else {
-                        selected_query.set(Some(query.get_value()))
+                        selected_query.try_set(query.try_get_value());
                     }
                 }
             }
@@ -956,15 +963,16 @@ fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
                         <Button
                             color=ColorOption::Red
                             on:click=move |_| {
-                                let query = query.read_value();
-                                let cache_key = query.cache_key;
-                                let key_hash = query.key_hash;
-                                if let Some(scope) = client
-                                    .scope_lookup
-                                    .scopes_mut()
-                                    .get_mut(&cache_key)
-                                {
-                                    scope.invalidate_query(&key_hash);
+                                if let Some(query) = query.try_read_value() {
+                                    let cache_key = query.cache_key;
+                                    let key_hash = query.key_hash;
+                                    if let Some(scope) = client
+                                        .scope_lookup
+                                        .scopes_mut()
+                                        .get_mut(&cache_key)
+                                    {
+                                        scope.invalidate_query(&key_hash);
+                                    }
                                 }
                             }
                         >

@@ -32,7 +32,7 @@ pub fn BlogList() -> impl IntoView {
                                             type="button"
                                             style:margin-left="0.5em"
                                             on:click=move |_| {
-                                                active_blogpost_id.set(Some(id));
+                                                active_blogpost_id.try_set(Some(id));
                                             }
                                         >
                                             "Select"
@@ -43,8 +43,9 @@ pub fn BlogList() -> impl IntoView {
                                             on:click=move |_| {
                                                 leptos::task::spawn_local(async move {
                                                     delete_blogpost(id).await.expect("delete blogposts");
-                                                    if active_blogpost_id.get_untracked() == Some(id) {
-                                                        active_blogpost_id.set(None);
+                                                    if active_blogpost_id.try_get_untracked() == Some(Some(id))
+                                                    {
+                                                        active_blogpost_id.try_set(None);
                                                     }
                                                     client.invalidate_query_scope(list_blogposts);
                                                 })
@@ -58,8 +59,9 @@ pub fn BlogList() -> impl IntoView {
                                             on:click=move |_| {
                                                 leptos::task::spawn_local(async move {
                                                     delete_blogpost(id).await.expect("delete blogposts");
-                                                    if active_blogpost_id.get_untracked() == Some(id) {
-                                                        active_blogpost_id.set(None);
+                                                    if active_blogpost_id.try_get_untracked() == Some(Some(id))
+                                                    {
+                                                        active_blogpost_id.try_set(None);
                                                     }
                                                     client
                                                         .update_query(
