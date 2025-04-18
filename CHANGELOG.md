@@ -46,6 +46,7 @@ QueryClient::new()
 - Subscription bugs ([#13](https://github.com/zakstucke/leptos-fetch/pull/10))
 - Fixed edge case where 2 scopes with different options would be treated the same ([#22](https://github.com/zakstucke/leptos-fetch/pull/22))
 - Improved threadsafety edgecases ([#25](https://github.com/zakstucke/leptos-fetch/pull/25))
+- Remove disposed error edgecases in devtools ([#26](https://github.com/zakstucke/leptos-fetch/pull/26))
 
 ### Tests
 - Sped up CI with erase_components ([#17](https://github.com/zakstucke/leptos-fetch/pull/17))
