@@ -7,6 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+rkyv = "0.8"
 tracing-wasm = "0.2"
 leptos = { version = "0.7", features = ["tracing"] }
 leptos_axum = { version = "0.7", optional = true }
@@ -19,7 +20,7 @@ lipsum = "0.9.1"
 futures.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
-leptos-fetch = { path = "../../leptos-fetch", features = ["devtools"] }
+leptos-fetch = { path = "../../leptos-fetch", features = ["devtools", "rkyv"] }
 
 [features]
 hydrate = ["leptos/hydrate"]
