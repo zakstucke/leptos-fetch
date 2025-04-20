@@ -35,7 +35,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Run Lib Tests
-        run: cargo hack test --lib --feature-powerset --no-dev-deps
+        run: cargo hack test --lib --feature-powerset
 
       - name: Run All Tests and Examples
         run: cargo test --all --all-features
