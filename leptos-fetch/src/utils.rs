@@ -66,7 +66,6 @@ impl DebugValue {
     }
 }
 
-// TODO replace others with this?
 pub(crate) struct OnDrop<F>
 where
     F: FnOnce(),

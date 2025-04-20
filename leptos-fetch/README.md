@@ -289,7 +289,9 @@ The public API will only provide access to cache values that are either threadsa
 It's possible to use non-json codecs for streaming leptos resources from the backend.
 The default is [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html).
 
-The current `codee` major version is `0.3` and will need to be imported in your project to customize the codec.
+If the `rkyv` feature of `leptos-fetch` is enabled, the default becomes [`codee::binary::RkyvCodec`](https://docs.rs/codee/latest/codee/binary/struct.RkyvCodec.html) using the [rkyv](https://docs.rs/rkyv/latest/rkyv/) crate, a more compact & efficient binary codec than serde/json.
+
+To use other codecs, or completely custom ones, the [codee](https://docs.rs/codee/latest/codee/) crate is used as the interface, current major version is `0.3`.
 
 E.g. to use [`codee::binary::MsgpackSerdeCodec`](https://docs.rs/codee/latest/codee/binary/struct.MsgpackSerdeCodec.html): 
 ```toml
