@@ -2,7 +2,7 @@
 
 use std::{any::TypeId, borrow::Borrow, fmt::Debug, hash::Hash, sync::Arc};
 
-use codee::{Decoder, Encoder, string::JsonSerdeCodec};
+use codee::{Decoder, Encoder};
 use leptos::{
     prelude::{
         ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read, ReadUntracked, Set,
@@ -28,6 +28,12 @@ use crate::{
 
 use super::cache::ScopeLookup;
 
+#[cfg(not(feature = "rkyv"))]
+pub(crate) type DefaultCodec = codee::string::JsonSerdeCodec;
+
+#[cfg(feature = "rkyv")]
+pub(crate) type DefaultCodec = codee::binary::RkyvCodec;
+
 /// The [`QueryClient`] stores all query data, and is used to manage queries.
 ///
 /// Should be provided via leptos context at the top of the app.
@@ -50,11 +56,20 @@ use super::cache::ScopeLookup;
 ///      // ...
 /// }
 /// ```
-#[derive(Debug)]
-pub struct QueryClient<Codec = JsonSerdeCodec> {
+pub struct QueryClient<Codec = DefaultCodec> {
     pub(crate) scope_lookup: ScopeLookup,
     options: QueryOptions,
     _ser: std::marker::PhantomData<SendWrapper<Codec>>,
+}
+
+impl<Codec> Debug for QueryClient<Codec> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryClient")
+            .field("scope_lookup", &self.scope_lookup)
+            .field("options", &self.options)
+            .field("codec", &std::any::type_name::<Codec>())
+            .finish()
+    }
 }
 
 impl<Codec: 'static> Clone for QueryClient<Codec> {
@@ -65,13 +80,13 @@ impl<Codec: 'static> Clone for QueryClient<Codec> {
 
 impl<Codec: 'static> Copy for QueryClient<Codec> {}
 
-impl Default for QueryClient<JsonSerdeCodec> {
+impl Default for QueryClient<DefaultCodec> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl QueryClient<JsonSerdeCodec> {
+impl QueryClient<DefaultCodec> {
     /// Creates a new [`QueryClient`] with the default codec: [`codee::string::JsonSerdeCodec`].
     ///
     /// Call [`QueryClient::set_codec()`] to set a different codec.
@@ -274,7 +289,7 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     /// Query with [`Resource`].
     ///
-    /// Resources must be serializable to potentially loade in `ssr` and stream to the client.
+    /// Resources must be serializable to potentially load in `ssr` and stream to the client.
     ///
     /// Resources must be `Send` and `Sync` to be multithreaded in ssr.
     ///
@@ -304,7 +319,7 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     /// Query with a blocking [`Resource`].
     ///
-    /// Resources must be serializable to potentially loade in `ssr` and stream to the client.
+    /// Resources must be serializable to potentially load in `ssr` and stream to the client.
     ///
     /// Resources must be `Send` and `Sync` to be multithreaded in ssr.
     ///
@@ -334,7 +349,7 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     /// Query with [`ArcResource`].
     ///
-    /// Resources must be serializable to potentially loade in `ssr` and stream to the client.
+    /// Resources must be serializable to potentially load in `ssr` and stream to the client.
     ///
     /// Resources must be `Send` and `Sync` to be multithreaded in ssr.
     ///
@@ -363,7 +378,7 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     /// Query with a blocking [`ArcResource`].
     ///
-    /// Resources must be serializable to potentially loade in `ssr` and stream to the client.
+    /// Resources must be serializable to potentially load in `ssr` and stream to the client.
     ///
     /// Resources must be `Send` and `Sync` to be multithreaded in ssr.
     ///

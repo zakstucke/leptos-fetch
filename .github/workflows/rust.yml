@@ -41,7 +41,7 @@ jobs:
         run: cargo test --all --all-features
 
       - name: Build wasm
-        run: cargo hack build --feature-powerset --exclude-features=ssr --target wasm32-unknown-unknown
+        run: cargo hack build --feature-powerset --no-dev-deps --exclude-features=ssr --target wasm32-unknown-unknown
 
       - name: Run Clippy
         run: cargo hack clippy --lib --feature-powerset --all-targets -- -D warnings
