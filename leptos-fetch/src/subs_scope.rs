@@ -30,7 +30,15 @@ pub(crate) struct ScopeSubs {
 const IS_FETCHING_ID: &str = "IsFetching";
 const IS_LOADING_ID: &str = "IsLoading";
 const VALUE_SET_UPDATED_OR_REMOVED_ID: &str = "ValueSetUpdatedOrRemoved";
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
 const ACTIVE_RESOURCES_ID: &str = "ActiveResources";
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
 const EVENTS_UPDATED_ID: &str = "EventsUpdated";
 
 impl ScopeSubs {
