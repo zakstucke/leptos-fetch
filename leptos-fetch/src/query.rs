@@ -42,7 +42,7 @@ impl<K, V> Drop for Query<K, V> {
     fn drop(&mut self) {
         self.scope_lookup
             .scope_subscriptions_mut()
-            .notify_value_set_updated_or_removed::<V>(self.cache_key, self.key_hash);
+            .notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
         #[cfg(any(
             all(debug_assertions, feature = "devtools"),
             feature = "devtools-always"
@@ -63,8 +63,6 @@ pub(crate) trait DynQuery {
     fn debug_key(&self) -> crate::utils::DebugValue;
 
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue;
-
-    fn value_type_id(&self) -> std::any::TypeId;
 
     fn combined_options(&self) -> QueryOptions;
 
@@ -101,10 +99,6 @@ where
     fn debug_value_may_panic(&self) -> crate::utils::DebugValue {
         // SAFETY: should only be called from single threaded frontend (devtools)
         crate::utils::DebugValue::new(self.value_maybe_stale.value().value_may_panic())
-    }
-
-    fn value_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<V>()
     }
 
     fn combined_options(&self) -> QueryOptions {
@@ -382,7 +376,7 @@ impl<K, V> Query<K, V> {
 
         self.scope_lookup
             .scope_subscriptions_mut()
-            .notify_value_set_updated_or_removed::<V>(self.cache_key, self.key_hash);
+            .notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
 
         result
     }

@@ -47,6 +47,7 @@ QueryClient::new()
 - Fixed edge case where 2 scopes with different options would be treated the same ([#22](https://github.com/zakstucke/leptos-fetch/pull/22))
 - Improved threadsafety edgecases ([#25](https://github.com/zakstucke/leptos-fetch/pull/25))
 - Remove disposed error edgecases in devtools ([#27](https://github.com/zakstucke/leptos-fetch/pull/27))
+- keyer reactivity issues and an `ArcLocalSignal` type given leptos itself doesn't natively support one ([#31](https://github.com/zakstucke/leptos-fetch/pull/31))
 
 ### Tests
 - Sped up CI with erase_components ([#17](https://github.com/zakstucke/leptos-fetch/pull/17))
