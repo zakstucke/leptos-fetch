@@ -15,9 +15,13 @@ macro_rules! defined_id_gen {
 defined_id_gen!(new_resource_id);
 defined_id_gen!(new_scope_id);
 defined_id_gen!(new_buster_id);
-defined_id_gen!(new_subscription_id);
 defined_id_gen!(new_sub_listener_id);
 defined_id_gen!(new_value_modified_id);
+#[cfg(any(
+    all(debug_assertions, feature = "devtools"),
+    feature = "devtools-always"
+))]
+defined_id_gen!(new_subscription_id);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeyHash(u64);
