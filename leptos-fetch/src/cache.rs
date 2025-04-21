@@ -471,7 +471,6 @@ impl ScopeLookup {
                                 cache_key: query_scope_info.cache_key,
                                 scope_title: query_scope_info.title.clone(),
                                 key_hash,
-                                v_type_id: std::any::TypeId::of::<V>(),
                                 debug_key: crate::utils::DebugValue::new(key),
                                 combined_options: crate::options_combine(
                                     client_options,

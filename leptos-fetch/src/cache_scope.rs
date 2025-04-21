@@ -59,7 +59,7 @@ where
         }
         self.scope_lookup
             .scope_subscriptions_mut()
-            .notify_value_set_updated_or_removed::<V>(self.query_scope_info.cache_key, key_hash);
+            .notify_value_set_updated_or_removed(self.query_scope_info.cache_key, key_hash);
     }
 
     pub fn insert(&mut self, key_hash: KeyHash, query: Query<K, V>) {
@@ -74,7 +74,6 @@ where
                 key_hash,
                 // SAFETY: query just created, so same thread
                 debug_key: crate::utils::DebugValue::new(query.key().value_may_panic()),
-                v_type_id: std::any::TypeId::of::<V>(),
                 combined_options: query.combined_options,
             };
             self.insert_without_query_created_notif(key_hash, query);
