@@ -7,6 +7,7 @@
 // When docs auto created for docs.rs, will include features, given docs.rs uses nightly by default:
 #![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_auto_cfg))]
 
+mod arc_local_signal;
 mod cache;
 mod cache_scope;
 mod debug_if_devtools_enabled;
@@ -36,6 +37,7 @@ mod dev_tools;
 #[cfg(any(feature = "devtools", feature = "devtools-always"))]
 pub use dev_tools::QueryDevtools;
 
+pub use arc_local_signal::*;
 pub use query_client::*;
 pub use query_options::*;
 pub use query_scope::{QueryScope, QueryScopeLocal};
@@ -986,6 +988,10 @@ mod test {
                             let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
                             assert_eq!(is_fetching.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 1);
+                            let is_fetching_clone = client.subscribe_is_fetching_arc(fetcher.clone(), || 2);
+                            assert_eq!(is_fetching_clone.get_untracked(), false);
+                            // Should still be 1, clones reuse:
+                            assert_eq!(client.subscriber_count(), 1);
                             let is_fetching_other = client.subscribe_is_fetching_arc(fetcher.clone(), || 3);
                             assert_eq!(is_fetching_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 2);
@@ -1075,6 +1081,9 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
 
                             drop(is_fetching);
+                            // Will only drop once the clone is dropped too:
+                            assert_eq!(client.subscriber_count(), 4);
+                            drop(is_fetching_clone);
                             assert_eq!(client.subscriber_count(), 3);
                             drop(is_loading);
                             assert_eq!(client.subscriber_count(), 2);
@@ -1127,7 +1136,7 @@ mod test {
                             assert_eq!(client.subscriber_count(), 0);
                             client.clear();
 
-                            // Now confirm the subscribers keyer is reactive correctly, and subscriptions don't accidentally say true for the wrong key:
+                            // Now confirm the subscriber's keyer changes are respected, and subscriptions don't accidentally say true for the wrong key:
                             let sub_key_signal = RwSignal::new(2);
                             let resource_key_signal = RwSignal::new(2);
                             let is_fetching = client.subscribe_is_fetching(fetcher.clone(), move || sub_key_signal.get());
@@ -1160,6 +1169,7 @@ mod test {
                             tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             assert_eq!(is_fetching.get_untracked(), false);
                             assert_eq!(is_loading.get_untracked(), false);
+                            assert_eq!(client.get_cached_query(fetcher.clone(), &3), Some(6));
 
                             // Stale should still mean only is_fetching is true:
                             client.invalidate_query(fetcher.clone(), &3);
@@ -1175,6 +1185,30 @@ mod test {
                             tick!();
                             assert_eq!(is_fetching.get_untracked(), false);
                             assert_eq!(is_loading.get_untracked(), false);
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            assert_eq!(client.get_cached_query(fetcher.clone(), &4), Some(8));
+
+                            // Now confirm the keyer is actually reactive, and is able to trigger updates itself. 
+                            // Do this by subscribing to is_fetching in an effect, and update the key in the keyer.
+                            let last_is_fetching_value = Arc::new(parking_lot::Mutex::new(None));
+                            Effect::new_isomorphic({
+                                let last_is_fetching_value = last_is_fetching_value.clone();
+                                move || {
+                                    *last_is_fetching_value.lock() = Some(is_fetching.get());
+                            }});
+                            assert_eq!(*last_is_fetching_value.lock(), None);
+                            tick!();
+                            assert_eq!(*last_is_fetching_value.lock(), Some(false));
+                            resource_key_signal.set(6);
+                            sub_key_signal.set(6);
+                            assert_eq!(*last_is_fetching_value.lock(), Some(false));
+                            tick!();
+                            assert_eq!(*last_is_fetching_value.lock(), Some(true));
+                            assert_eq!(is_fetching.get_untracked(), true);
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
+                            assert_eq!(*last_is_fetching_value.lock(), Some(false));
+                            assert_eq!(is_fetching.get_untracked(), false);
+                            assert_eq!(client.get_cached_query(fetcher.clone(), &6), Some(12));
                         }
                     }};
                 }

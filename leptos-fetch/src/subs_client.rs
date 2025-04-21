@@ -1,4 +1,4 @@
-use std::{any::TypeId, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use futures::{
     StreamExt,
@@ -27,7 +27,6 @@ pub(crate) struct QueryCreatedInfo {
     pub cache_key: ScopeCacheKey,
     pub scope_title: Arc<String>,
     pub key_hash: KeyHash,
-    pub v_type_id: TypeId,
     pub debug_key: DebugValue,
     pub combined_options: QueryOptions,
 }
@@ -63,7 +62,6 @@ impl ClientSubs {
                         cache_key: *cache_key,
                         scope_title: scope.title().clone(),
                         key_hash: *query.key_hash(),
-                        v_type_id: query.value_type_id(),
                         debug_key: query.debug_key().clone(),
                         combined_options: query.combined_options(),
                     });

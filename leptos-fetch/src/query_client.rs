@@ -1,6 +1,6 @@
 #![allow(ungated_async_fn_track_caller)] // Want it to auto-turn on when stable
 
-use std::{any::TypeId, borrow::Borrow, fmt::Debug, hash::Hash, sync::Arc};
+use std::{borrow::Borrow, fmt::Debug, hash::Hash, sync::Arc};
 
 use codee::{Decoder, Encoder};
 use leptos::{
@@ -15,7 +15,7 @@ use leptos::{
 use send_wrapper::SendWrapper;
 
 use crate::{
-    QueryOptions,
+    ArcLocalSignal, QueryOptions,
     cache::{CachedOrFetchCbInputVariant, CachedOrFetchCbOutput},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
@@ -1385,39 +1385,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let cache_key = query_scope.cache_key();
-        let keyer = SendWrapper::new(keyer);
-        let keyer = MaybeLocal::new(ArcSignal::derive(move || {
-            keyer().into_maybe_key().map(|k| KeyHash::new(&k))
-        }));
-
-        let dyn_signal = self
-            .scope_lookup
-            .scope_subscriptions_mut()
-            .add_value_set_updated_or_removed_subscription(
-                cache_key,
-                keyer.clone(),
-                TypeId::of::<V>(),
-            );
-
-        let scope_lookup = self.scope_lookup;
-        // TODO switch these around and have ArcSignal as the base case once upstreamed.
-        Signal::derive_local(move || {
-            dyn_signal.track();
-            if let Some(key_signal) = keyer.value_if_safe() {
-                if let Some(key) = key_signal.read_untracked().as_ref() {
-                    scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
-                        // WONTPANIC: with_cached_query will only output values that are safe on this thread:
-                        maybe_cached
-                            .map(|cached| cached.value_maybe_stale().value_may_panic().clone())
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
+        self.subscribe_value_arc_local(query_scope, keyer).into()
     }
 
     /// Subscribe to the value of a non-threadsafe query.
@@ -1432,14 +1400,40 @@ impl<Codec: 'static> QueryClient<Codec> {
         &self,
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
         keyer: impl Fn() -> MaybeKey + 'static,
-    ) -> ArcSignal<Option<V>, LocalStorage>
+    ) -> ArcLocalSignal<Option<V>>
     where
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         MaybeKey: QueryMaybeKey<K, V>,
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.subscribe_value_local(query_scope, keyer).into()
+        let cache_key = query_scope.cache_key();
+        let keyer = ArcLocalSignal::derive_local(move || {
+            keyer().into_maybe_key().map(|k| KeyHash::new(&k))
+        });
+        let dyn_signal = self
+            .scope_lookup
+            .scope_subscriptions_mut()
+            .add_value_set_updated_or_removed_subscription(
+                cache_key,
+                MaybeLocal::new_local({
+                    let keyer = keyer.clone();
+                    move || keyer.get()
+                }),
+            );
+
+        let scope_lookup = self.scope_lookup;
+        ArcLocalSignal::derive_local(move || {
+            dyn_signal.track();
+            if let Some(key) = keyer.read_untracked().as_ref() {
+                scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
+                    // WONTPANIC: with_cached_query will only output values that are safe on this thread:
+                    maybe_cached.map(|cached| cached.value_maybe_stale().value_may_panic().clone())
+                })
+            } else {
+                None
+            }
+        })
     }
 
     /// Subscribe to the value of a query.
@@ -1462,32 +1456,27 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
     {
         let cache_key = query_scope.cache_key();
-        let keyer = MaybeLocal::new(ArcSignal::derive(move || {
-            keyer().into_maybe_key().map(|k| KeyHash::new(&k))
-        }));
+        let keyer = ArcSignal::derive(move || keyer().into_maybe_key().map(|k| KeyHash::new(&k)));
 
         let dyn_signal = self
             .scope_lookup
             .scope_subscriptions_mut()
             .add_value_set_updated_or_removed_subscription(
                 cache_key,
-                keyer.clone(),
-                TypeId::of::<V>(),
+                MaybeLocal::new({
+                    let keyer = keyer.clone();
+                    move || keyer.get()
+                }),
             );
 
         let scope_lookup = self.scope_lookup;
         ArcSignal::derive(move || {
             dyn_signal.track();
-            if let Some(key_signal) = keyer.value_if_safe() {
-                if let Some(key) = key_signal.read_untracked().as_ref() {
-                    scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
-                        // WONTPANIC: with_cached_query will only output values that are safe on this thread:
-                        maybe_cached
-                            .map(|cached| cached.value_maybe_stale().value_may_panic().clone())
-                    })
-                } else {
-                    None
-                }
+            if let Some(key) = keyer.read_untracked().as_ref() {
+                scope_lookup.with_cached_query::<K, V, _>(key, &cache_key, |maybe_cached| {
+                    // WONTPANIC: with_cached_query will only output values that are safe on this thread:
+                    maybe_cached.map(|cached| cached.value_maybe_stale().value_may_panic().clone())
+                })
             } else {
                 None
             }

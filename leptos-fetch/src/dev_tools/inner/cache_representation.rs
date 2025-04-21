@@ -111,8 +111,7 @@ pub fn prepare(client: QueryClient) -> CacheRep {
                 let value_set_updated_or_removed_signal = scope_subscriptions_mut
                     .add_value_set_updated_or_removed_subscription(
                         query_info.cache_key,
-                        MaybeLocal::new(ArcSignal::derive(move || Some(query_info.key_hash))),
-                        query_info.v_type_id,
+                        MaybeLocal::new(move || Some(query_info.key_hash)),
                     );
 
                 let value_derivs = {

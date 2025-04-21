@@ -138,6 +138,25 @@ impl<V> MaybeLocal<V> {
         }
     }
 
+    /// Assuming NewV is threadsafe, map the value to a new type.
+    /// If the original value is local, the new value will be local as well.
+    #[track_caller]
+    pub fn map<NewV>(self, mapper: impl FnOnce(V) -> NewV) -> MaybeLocal<NewV>
+    where
+        NewV: Send + Sync + 'static,
+    {
+        match self.0 {
+            Inner::Local {
+                value,
+                src_thread_id,
+            } => MaybeLocal(Inner::Local {
+                value: SendWrapper::new(mapper(value.take())),
+                src_thread_id,
+            }),
+            Inner::Threadsafe(value) => MaybeLocal(Inner::Threadsafe(mapper(value))),
+        }
+    }
+
     /// true when [`Inner::Local`]
     pub fn is_local(&self) -> bool {
         matches!(self.0, Inner::Local { .. })
