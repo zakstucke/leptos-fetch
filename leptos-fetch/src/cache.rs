@@ -16,6 +16,7 @@ use crate::{
     query::Query,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
+    trie::Trie,
     utils::{KeyHash, OnDrop, new_buster_id, new_scope_id},
 };
 
@@ -57,11 +58,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         feature = "devtools-always"
     ))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery>;
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
-    fn invalidate_query(&mut self, key_hash: &KeyHash);
+    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>);
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -107,13 +104,11 @@ where
             .collect::<Vec<_>>()
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
-    fn invalidate_query(&mut self, key_hash: &KeyHash) {
-        if let Some(query) = self.get_mut(key_hash) {
-            query.invalidate();
+    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>) {
+        for key_hash in key_hashes {
+            if let Some(query) = self.get_mut(&key_hash) {
+                query.invalidate();
+            }
         }
     }
 
@@ -150,6 +145,10 @@ static SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
 static SCOPE_SUBSCRIPTION_LOOKUPS: LazyLock<parking_lot::Mutex<HashMap<u64, ScopeSubs>>> =
     LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
+static INVALIDATION_TRIE: LazyLock<
+    parking_lot::Mutex<HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>>,
+> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
 #[cfg(any(
     all(debug_assertions, feature = "devtools"),
     feature = "devtools-always"
@@ -164,10 +163,14 @@ impl ScopeLookup {
 
         let result = Self { scope_id };
 
-        SCOPE_LOOKUPS.write().insert(scope_id, HashMap::new());
+        SCOPE_LOOKUPS.write().insert(scope_id, Default::default());
         SCOPE_SUBSCRIPTION_LOOKUPS
             .lock()
             .insert(scope_id, ScopeSubs::new(result));
+
+        INVALIDATION_TRIE
+            .lock()
+            .insert(scope_id, Default::default());
 
         #[cfg(any(
             all(debug_assertions, feature = "devtools"),
@@ -198,6 +201,19 @@ impl ScopeLookup {
                 scope_lookups
                     .get_mut(&self.scope_id)
                     .expect("Scope not found (bug)")
+            },
+        )
+    }
+
+    pub fn invalidation_trie(
+        &self,
+    ) -> parking_lot::MappedMutexGuard<'_, Trie<(ScopeCacheKey, KeyHash)>> {
+        parking_lot::MutexGuard::map(
+            INVALIDATION_TRIE.lock(),
+            |invalidation_trie: &mut HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>| {
+                invalidation_trie
+                    .get_mut(&self.scope_id)
+                    .expect("invalidation_trie not found (bug)")
             },
         )
     }
@@ -383,6 +399,7 @@ impl ScopeLookup {
         scope_options: Option<QueryOptions>,
         maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
         query_scope_info: &QueryScopeInfo,
+        invalidation_prefix: Option<Vec<String>>,
         key: &K,
         fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
@@ -533,6 +550,7 @@ impl ScopeLookup {
                                     client_options,
                                     *self,
                                     query_scope_info,
+                                    invalidation_prefix,
                                     key_hash,
                                     lazy_maybe_local_key(),
                                     new_value,

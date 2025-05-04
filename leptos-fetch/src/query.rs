@@ -1,4 +1,9 @@
-use std::{collections::HashSet, fmt::Debug, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    sync::Arc,
+    time::Duration,
+};
 
 use leptos::prelude::{ArcRwSignal, Set};
 use parking_lot::Mutex;
@@ -21,6 +26,7 @@ pub(crate) struct Query<K, V: 'static> {
     value_maybe_stale: GcValue<V>,
     pub combined_options: QueryOptions,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    invalidation_prefix: Option<Vec<String>>,
     invalidated: bool,
     /// Will always be None on the server, hence the SendWrapper is fine:
     gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>,
@@ -152,6 +158,7 @@ impl<K, V> Query<K, V> {
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
         query_scope_info: &QueryScopeInfo,
+        invalidation_prefix: Option<Vec<String>>,
         key_hash: KeyHash,
         key: MaybeLocal<K>,
         value: MaybeLocal<V>,
@@ -173,14 +180,30 @@ impl<K, V> Query<K, V> {
         let active_resources =
             active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
 
+        // Add to the invalidation prefix trie/hierarchy on creation:
+        if let Some(invalidation_prefix) = &invalidation_prefix {
+            scope_lookup
+                .invalidation_trie()
+                .insert(invalidation_prefix, (cache_key, key_hash));
+        }
+
         let gc_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.gc_time() < Duration::from_secs(60 * 60 * 24 * 365)
         {
             let active_resources = active_resources.clone();
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
+            let invalidation_prefix = invalidation_prefix.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
                     scope_lookup.gc_query::<K, V>(&cache_key, &key_hash);
+
+                    // Remove from the invalidation prefix trie/hierarchy on gc:
+                    if let Some(invalidation_prefix) = &invalidation_prefix {
+                        scope_lookup
+                            .invalidation_trie()
+                            .remove(invalidation_prefix, &(cache_key, key_hash));
+                    }
+
                     true
                 } else {
                     false
@@ -238,6 +261,7 @@ impl<K, V> Query<K, V> {
             ),
             combined_options,
             updated_at: created_at,
+            invalidation_prefix,
             invalidated: false,
             gc_cb,
             refetch_cb,
@@ -286,17 +310,48 @@ impl<K, V> Query<K, V> {
     }
 
     pub fn invalidate(&mut self) {
-        self.invalidated = true;
-        // To re-trigger all active resources automatically on manual invalidation:
-        self.buster.set(new_buster_id());
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
-        {
-            self.events.push(crate::events::Event::new(
-                crate::events::EventVariant::Invalidated,
-            ));
+        if !self.invalidated {
+            self.invalidated = true;
+            // To re-trigger all active resources automatically on manual invalidation:
+            self.buster.set(new_buster_id());
+
+            // Invalidate any linked children through the invalidation prefix trie/hierarchy on creation:
+            if let Some(invalidation_prefix) = &self.invalidation_prefix {
+                let trie = self.scope_lookup.invalidation_trie();
+                let mut invalidation_map = HashMap::new();
+                for (cache_key, key_hash) in trie.find_with_prefix(invalidation_prefix) {
+                    if cache_key == &self.cache_key && *key_hash == self.key_hash {
+                        continue;
+                    }
+
+                    invalidation_map
+                        .entry(*cache_key)
+                        .or_insert_with(Vec::new)
+                        .push(*key_hash);
+                }
+                if !invalidation_map.is_empty() {
+                    // Not ideal having to spawn, but need to get access to the global lock we'll already be holding in this .invalidate() fn:
+                    let scope_lookup = self.scope_lookup;
+                    leptos::task::spawn(async move {
+                        let mut scopes = scope_lookup.scopes_mut();
+                        for (cache_key, key_hashes) in invalidation_map {
+                            if let Some(scope) = scopes.get_mut(&cache_key) {
+                                scope.invalidate_queries(key_hashes);
+                            }
+                        }
+                    });
+                }
+            }
+
+            #[cfg(any(
+                all(debug_assertions, feature = "devtools"),
+                feature = "devtools-always"
+            ))]
+            {
+                self.events.push(crate::events::Event::new(
+                    crate::events::EventVariant::Invalidated,
+                ));
+            }
         }
     }
 

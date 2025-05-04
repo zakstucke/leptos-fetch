@@ -75,6 +75,7 @@ macro_rules! define {
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
+            invalidation_hierarchy_fn: Option<Arc<dyn Fn(&K) -> Vec<String> + Send + Sync>>,
             fetcher_type_id: TypeId,
             cache_key: ScopeCacheKey,
             options: QueryOptions,
@@ -120,6 +121,7 @@ macro_rules! define {
                             feature = "devtools-always"
                         ))]
                         title: query_scope.title(),
+                        invalidation_hierarchy_fn: None,
                         query: Arc::new(move |key| Box::pin(query_scope.query(key))),
                     }
                 }
@@ -129,6 +131,56 @@ macro_rules! define {
                 /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
                 pub fn set_options(mut self, options: QueryOptions) -> Self {
                     self.options = options;
+                    self
+                }
+
+                /// Different query types are sometimes linked to the same source, e.g. you may want an invalidation of `list_blogposts()` to always automatically invalidate `get_blogpost(id)`.
+                ///
+                /// [`QueryScope::with_invalidation_link`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.subscribe_is_fetching::with_invalidation_link) can be used to this effect, given a query key `&K`, you provide a `Vec<String>` that's used as a **hierarchy key (HK)** for that query. When a query is invalidated, any query's **HK** that's prefixed by this **HK** will also be invalidated automatically. E.g. A query with **HK** `["users"]` will also auto invalidate another query with `["users", "1"]`, but not the other way around. 2 queries with an identicial **HK** of `["users"]` will auto invalidate each other.
+                ///
+                /// ```rust
+                /// use std::time::Duration;
+                ///
+                /// use leptos_fetch::{QueryClient, QueryScope, QueryOptions};
+                /// use leptos::prelude::*;
+                ///
+                /// #[derive(Debug, Clone)]
+                /// struct User;
+                ///
+                /// fn list_users_query() -> QueryScope<(), Vec<User>> {
+                ///     QueryScope::new(async || vec![])
+                ///         .with_invalidation_link(
+                ///             |_key| ["users"]
+                ///         )
+                /// }
+                ///
+                /// fn get_user_query() -> QueryScope<i32, User> {
+                ///     QueryScope::new(async move |user_id: i32| User)
+                ///         .with_invalidation_link(
+                ///             |user_id| ["users".to_string(), user_id.to_string()]
+                ///         )
+                /// }
+                ///
+                /// let client = QueryClient::new();
+                ///
+                /// // This invalidates only user "2", because ["users", "2"] is not a prefix of ["users"],
+                /// // list_users_query is NOT invalidated.
+                /// client.invalidate_query(get_user_query(), &2);
+                ///
+                /// // This invalidates both queries, because ["users"] is a prefix of ["users", "$x"]
+                /// client.invalidate_query(list_users_query(), &());
+                /// ```
+                pub fn with_invalidation_link<S, I>(
+                    mut self,
+                    invalidation_hierarchy_fn: impl Fn(&K) -> I + Send + Sync + 'static
+                ) -> Self
+                where
+                    I: IntoIterator<Item = S> + 'static $($impl_fn_generics)*,
+                    S: Into<String> + 'static $($impl_fn_generics)*,
+                {
+                    self.invalidation_hierarchy_fn = Some(Arc::new(move |key| {
+                        invalidation_hierarchy_fn(key).into_iter().map(|s| s.into()).collect()
+                    }));
                     self
                 }
 
@@ -162,6 +214,8 @@ macro_rules! define {
 
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static;
 
+                fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>>;
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -190,6 +244,10 @@ macro_rules! define {
                     self(key)
                 }
 
+                fn invalidation_prefix(&self, _key: &K) -> Option<Vec<String>> {
+                    None
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -216,6 +274,10 @@ macro_rules! define {
 
                 fn query(&self, _key: ()) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     self()
+                }
+
+                fn invalidation_prefix(&self, _key: &()) -> Option<Vec<String>> {
+                    None
                 }
 
                 #[cfg(any(
@@ -249,6 +311,14 @@ macro_rules! define {
                     (self.query)(key)
                 }
 
+                fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
+                    if let Some(invalidation_hierarchy_fn) = &self.invalidation_hierarchy_fn {
+                        Some(invalidation_hierarchy_fn(key))
+                    } else {
+                        None
+                    }
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -278,6 +348,14 @@ macro_rules! define {
 
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     (self.query)(key)
+                }
+
+                fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
+                    if let Some(invalidation_hierarchy_fn) = &self.invalidation_hierarchy_fn {
+                        Some(invalidation_hierarchy_fn(key))
+                    } else {
+                        None
+                    }
                 }
 
                 #[cfg(any(
@@ -310,6 +388,10 @@ macro_rules! define {
 
                 fn query(&self, key: K) -> impl Future<Output = V> $($impl_fut_generics)* + 'static {
                     T::query(self, key)
+                }
+
+                fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
+                    T::invalidation_prefix(self, key)
                 }
 
                 #[cfg(any(
@@ -346,6 +428,12 @@ where
         (self.query)(key)
     }
 
+    fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
+        self.invalidation_hierarchy_fn
+            .as_ref()
+            .map(|invalidation_hierarchy_fn| invalidation_hierarchy_fn(key))
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -374,6 +462,12 @@ where
 
     fn query(&self, key: K) -> impl Future<Output = V> + 'static {
         (self.query)(key)
+    }
+
+    fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
+        self.invalidation_hierarchy_fn
+            .as_ref()
+            .map(|invalidation_hierarchy_fn| invalidation_hierarchy_fn(key))
     }
 
     #[cfg(any(

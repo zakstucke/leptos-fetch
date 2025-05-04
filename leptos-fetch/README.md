@@ -38,6 +38,7 @@ LF also allows you to interact declaratively with queries outside resources, sub
 - [Quick Start](#quick-start)
 - [Query Options](#query-options)
 - [Declarative Query Interactions](#declarative-query-management)
+- [Linked Invalidation](#linked-invalidation)
 - [Subscriptions](#subscriptions)
 - [Thread Local & Threadsafe Variants](#thread-local-and-threadsafe-variants)
 - [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
@@ -263,6 +264,45 @@ When a query is invalidated, the following happens:
 - If a query is currently being used, it will be refetched immediately.
 
 This can be particularly useful in cases where you have a highly dynamic data source, or when user actions in the application can directly modify data that other parts of your application rely on.
+
+## Linked Invalidation
+
+Different query types are sometimes linked to the same source, e.g. you may want an invalidation of `list_blogposts()` to always automatically invalidate `get_blogpost(id)`.
+
+[`QueryScope::with_invalidation_link`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.subscribe_is_fetching::with_invalidation_link) can be used to this effect, given a query key `&K`, you provide a `Vec<String>` that's used as a **hierarchy key (HK)** for that query. When a query is invalidated, any query's **HK** that's prefixed by this **HK** will also be invalidated automatically. E.g. A query with **HK** `["users"]` will also auto invalidate another query with `["users", "1"]`, but not the other way around. 2 queries with an identicial **HK** of `["users"]` will auto invalidate each other.
+
+```rust
+use std::time::Duration;
+
+use leptos_fetch::{QueryClient, QueryScope, QueryOptions};
+use leptos::prelude::*;
+
+#[derive(Debug, Clone)]
+struct User;
+
+fn list_users_query() -> QueryScope<(), Vec<User>> {
+    QueryScope::new(async || vec![])
+        .with_invalidation_link(
+            |_key| ["users"]
+        )
+}
+
+fn get_user_query() -> QueryScope<i32, User> {
+    QueryScope::new(async move |user_id: i32| User)
+        .with_invalidation_link(
+            |user_id| ["users".to_string(), user_id.to_string()]
+        )
+}
+
+let client = QueryClient::new();
+
+// This invalidates only user "2", because ["users", "2"] is not a prefix of ["users"], 
+// list_users_query is NOT invalidated.
+client.invalidate_query(get_user_query(), &2);
+
+// This invalidates both queries, because ["users"] is a prefix of ["users", "$x"]
+client.invalidate_query(list_users_query(), &());
+```
 
 ## Subscriptions
 

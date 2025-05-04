@@ -29,6 +29,7 @@ mod resource_drop_guard;
 ))]
 mod subs_client;
 mod subs_scope;
+mod trie;
 mod utils;
 mod value_with_callbacks;
 
@@ -1409,7 +1410,7 @@ mod test {
                             }
 
                             // Because it should now be stale, not gc'd,
-                            // sync fns on a new resource instance should still return the new value, it just means a background refresh has been triggered:
+                            // sync fns on a new resource instance should still return the value, it just means a background refresh has been triggered:
                             let resource2 = $get_resource();
                             tick!();
                             assert_eq!(resource2.get_untracked(), Some(4));
@@ -1433,6 +1434,73 @@ mod test {
                     resource_type,
                     arc
                 );
+            })
+            .await;
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_invalidation_hierarchy(#[values(false, true)] server_ctx: bool) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (fetcher, _fetch_calls) = default_fetcher();
+                let (client, _guard, _owner) = prep_vari!(server_ctx);
+
+                // If this is invalidated, it should also invalidate the child resource.
+                let fetcher = fetcher.with_invalidation_link(|_key| vec!["base", "users"]);
+                client.fetch_query(&fetcher, &2).await;
+                assert!(!client.is_key_invalid(&fetcher, &2));
+
+                // If this is invalidated, it'll invalidate both the main fetcher and the child resource.
+                let hierarchy_parent_scope =
+                    QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
+                client
+                    .fetch_query(hierarchy_parent_scope.clone(), &())
+                    .await;
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
+
+                // If this is invalidated, it shouldn't affect either of the others, as it's the lowest in the invalidation hierarchy.
+                let hierarchy_child_scope = QueryScope::new(async |user_id| user_id)
+                    .with_invalidation_link(|user_id: &usize| {
+                        ["base".to_string(), "users".to_string(), user_id.to_string()]
+                    });
+                client
+                    .fetch_query(hierarchy_child_scope.clone(), &100)
+                    .await;
+                assert!(!client.is_key_invalid(&hierarchy_child_scope, &100));
+
+                client.invalidate_query(&hierarchy_parent_scope, ());
+                tick!();
+                assert!(client.is_key_invalid(&hierarchy_parent_scope, &()));
+                assert!(client.is_key_invalid(&fetcher, &2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
+
+                // Reset:
+                client.fetch_query(&hierarchy_parent_scope, &()).await;
+                client.fetch_query(&fetcher, &2).await;
+                client
+                    .fetch_query(hierarchy_child_scope.clone(), &100)
+                    .await;
+
+                client.invalidate_query(&fetcher, 2);
+                tick!();
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
+                assert!(client.is_key_invalid(&fetcher, &2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
+
+                // Reset:
+                client.fetch_query(&hierarchy_parent_scope, &()).await;
+                client.fetch_query(&fetcher, &2).await;
+                client
+                    .fetch_query(hierarchy_child_scope.clone(), &100)
+                    .await;
+
+                client.invalidate_query(&hierarchy_child_scope, 100);
+                tick!();
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
+                assert!(!client.is_key_invalid(&fetcher, &2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
             })
             .await;
     }
