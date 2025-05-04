@@ -4,7 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.4.0](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.0)
+
 ### BREAKING
+- Upgrade to `leptos-0.8.0` ([#37](https://github.com/zakstucke/leptos-fetch/pull/37))
 - Changes required for the custom codec feature for correct type inferrence. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
     - Replaced `QueryClient::new_with_options` + `QueryClient::provide_with_options` with `QueryClient::with_options(self, options) -> Self`, e.g. `QueryClient::new().with_options(..)`. 
     - Replaced `QueryClient::provide()` with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
