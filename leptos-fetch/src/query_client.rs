@@ -1671,8 +1671,6 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        use crate::query::DynQuery;
-
         self.scope_lookup.with_cached_scope_mut::<K, V, _>(
             &QueryScopeInfo::new_local(&query_scope),
             false,

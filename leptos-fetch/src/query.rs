@@ -273,6 +273,11 @@ impl<K, V> Query<K, V> {
         }
     }
 
+    #[cfg(test)]
+    pub fn is_invalidated(&self) -> bool {
+        self.invalidated
+    }
+
     pub fn mark_resource_active(&self, resource_id: u64) {
         let total_active = {
             let mut guard = self.active_resources.lock();
