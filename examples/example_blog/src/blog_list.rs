@@ -11,6 +11,12 @@ pub fn BlogList() -> impl IntoView {
 
     let bloglist = client.resource(list_blogposts, move || ());
 
+    // Invalidate whenever a new blogpost is added:
+    Effect::new(move |_| {
+        add_blogposts.version().get();
+        client.invalidate_query_scope(list_blogposts);
+    });
+
     let active_blogpost_id = RwSignal::new(None);
     let active_blogpost = client.resource(get_blogpost_full, move || active_blogpost_id.get());
 
