@@ -36,6 +36,7 @@ LF also allows you to interact declaratively with queries outside resources, sub
 ## Table of Contents
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Devtools](#devtools)
 - [Query Options](#query-options)
 - [Declarative Query Interactions](#declarative-query-management)
 - [Linked Invalidation](#linked-invalidation)
@@ -164,7 +165,7 @@ QueryClient::new().resource(get_track, move || value.get());
 value.set(Some(1));
 ```
 
-### Devtools
+## Devtools
 <p align="start">
     <img src="https://raw.githubusercontent.com/zakstucke/leptos-fetch/main/devtools_modal.jpg" alt="Devtools Modal"/>
 </p>
