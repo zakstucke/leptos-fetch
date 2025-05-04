@@ -40,6 +40,7 @@ QueryClient::new()
 - [`QueryClient::update_query_async`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async) added to make async updates to queries seamlessly, making patterns such as infinite queries simpler. Pagination and infinite query examples added to readme. ([#14](https://github.com/zakstucke/leptos-fetch/pull/14, [#23](https://github.com/zakstucke/leptos-fetch/pull/23)))
 - Query functions can be supplied with no key parameter/argument, will default to `()`, prevents needing to add a wrapping function to external fns that don't need an argument. ([#16](https://github.com/zakstucke/leptos-fetch/pull/16))
 - [`QueryClient::invalidate_queries_with_predicate`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.invalidate_queries_with_predicate) to invalidate a subset of queries in a scope without knowing the key ahead of time. ([#18](https://github.com/zakstucke/leptos-fetch/pull/18))
+- [`QueryScope::with_invalidation_link`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.subscribe_is_fetching::with_invalidation_link) to allow automatic hierarchies of invalidations across query types. ([#33](https://github.com/zakstucke/leptos-fetch/pull/33), closes [#12](https://github.com/zakstucke/leptos-fetch/issues/12))
 
 ### Fixed
 - Reduced internal generic codegen bloat over `K` internally, `Eq` no longer required, just `PartialEq` on nonlocal resources ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))

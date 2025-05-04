@@ -971,7 +971,7 @@ fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
                                         .scopes_mut()
                                         .get_mut(&cache_key)
                                     {
-                                        scope.invalidate_query(&key_hash);
+                                        scope.invalidate_queries(vec![key_hash]);
                                     }
                                 }
                             }
