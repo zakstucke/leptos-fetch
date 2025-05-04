@@ -28,7 +28,7 @@ pub(crate) struct DevtoolsContext {
 }
 
 #[component]
-pub(crate) fn DevtoolsRoot(client: QueryClient) -> impl IntoView {
+pub(crate) fn DevtoolsRoot<Codec: 'static>(client: QueryClient<Codec>) -> impl IntoView {
     let open = RwSignal::new(false);
     view! {
         <Portal>
@@ -57,7 +57,7 @@ pub(crate) fn DevtoolsRoot(client: QueryClient) -> impl IntoView {
 }
 
 #[component]
-pub(crate) fn DevtoolsInner(client: QueryClient) -> impl IntoView {
+pub(crate) fn DevtoolsInner<Codec: 'static>(client: QueryClient<Codec>) -> impl IntoView {
     let DevtoolsContext {
         cache_rep,
         selected_query,
@@ -696,7 +696,10 @@ fn CaretSwitch(open: RwSignal<bool>) -> impl IntoView {
 }
 
 #[component]
-fn ClearCache(client: QueryClient, maybe_cache_key: Option<ScopeCacheKey>) -> impl IntoView {
+fn ClearCache<Codec: 'static>(
+    client: QueryClient<Codec>,
+    maybe_cache_key: Option<ScopeCacheKey>,
+) -> impl IntoView {
     view! {
         <button
             class="lq-bg-lq-input lq-text-lq-input-foreground lq-rounded-md lq-px-2 lq-py-1 lq-text-xs lq-inline-flex lq-items-center lq-gap-1 lq-border lq-border-lq-border"
@@ -850,7 +853,7 @@ fn RowStateLabel(query: QueryRep) -> impl IntoView {
 }
 
 #[component]
-fn SelectedQuery(client: QueryClient, query: QueryRep) -> impl IntoView {
+fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) -> impl IntoView {
     let created_at = StoredValue::new(
         query
             .created_at
