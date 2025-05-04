@@ -100,7 +100,7 @@ pub struct QueryRep {
     pub events: ArcSignal<Vec<Event>>,
 }
 
-pub fn prepare(client: QueryClient) -> CacheRep {
+pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
     let cache_rep = CacheRep::default();
     if cfg!(not(feature = "ssr")) {
         let add_query = {

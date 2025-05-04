@@ -23,9 +23,9 @@
 /// }
 /// ```
 #[leptos::component]
-pub fn QueryDevtools(
+pub fn QueryDevtools<Codec: 'static>(
     /// The client to monitor.
-    client: crate::QueryClient,
+    client: crate::QueryClient<Codec>,
 ) -> impl leptos::IntoView {
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
