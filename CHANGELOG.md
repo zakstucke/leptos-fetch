@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ---
 
+## [0.4.1](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.1)
+
+### Fixed
+- Rectify mistake in docs: the default stale_time is now `never`. (([#38](https://github.com/zakstucke/leptos-fetch/pull/38)))
+
+---
+
 ## [0.4.0](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.0)
 
 ### BREAKING
