@@ -25,7 +25,7 @@ impl QueryOptions {
     ///
     /// Default: `10 seconds`
     #[track_caller]
-    pub fn set_stale_time(mut self, stale_time: std::time::Duration) -> Self {
+    pub fn with_stale_time(mut self, stale_time: std::time::Duration) -> Self {
         if let Some(gc_time) = self.gc_time {
             // If stale_time is greater than gc_time, stale_time will be set to gc_time.
             if stale_time > gc_time {
@@ -45,7 +45,7 @@ impl QueryOptions {
     ///
     /// Default: `5 minutes`
     #[track_caller]
-    pub fn set_gc_time(mut self, gc_time: std::time::Duration) -> Self {
+    pub fn with_gc_time(mut self, gc_time: std::time::Duration) -> Self {
         if let Some(stale_time) = self.stale_time {
             if stale_time > gc_time {
                 // If stale_time is greater than gc_time, stale_time will be set to gc_time.
@@ -63,7 +63,7 @@ impl QueryOptions {
     ///
     /// Default: No refetching
     #[track_caller]
-    pub fn set_refetch_interval(mut self, refetch_interval: std::time::Duration) -> Self {
+    pub fn with_refetch_interval(mut self, refetch_interval: std::time::Duration) -> Self {
         self.refetch_interval = Some(refetch_interval);
         self
     }

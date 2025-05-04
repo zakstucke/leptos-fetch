@@ -27,7 +27,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 #[component]
 pub fn App() -> impl IntoView {
     let client = QueryClient::new()
-        .set_options(QueryOptions::default().set_stale_time(Duration::from_secs(10)))
+        .with_options(QueryOptions::default().with_stale_time(Duration::from_secs(10)))
         .provide();
 
     view! {

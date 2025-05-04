@@ -6,17 +6,17 @@ All notable changes to this project are documented in this file.
 
 ### BREAKING
 - Changes required for the custom codec feature for correct type inferrence. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
-    - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::set_options(self, options) -> Self` is available as a builder method, e.g. `QueryClient::new().set_options(..)`. 
+    - `QueryClient::new_with_options` and `QueryClient::provide_with_options` have been removed. Instead, `QueryClient::with_options(self, options) -> Self` is available as a builder method, e.g. `QueryClient::new().with_options(..)`. 
     - `QueryClient::provide()` replaced with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
     - `QueryClient::expect()` removed, `expect_context::<QueryClient>()` directly from leptos should be used instead. 
-- `QueryScope::new(fetcher, options) -> QueryScope::new(fetcher).set_options(options)` ([#20](https://github.com/zakstucke/leptos-fetch/pull/20))
+- `QueryScope::new(fetcher, options) -> QueryScope::new(fetcher).with_options(options)` ([#20](https://github.com/zakstucke/leptos-fetch/pull/20))
 - Default `stale_time` changed from `10 seconds` to never, providing less surprising default behaviour. ([#20](https://github.com/zakstucke/leptos-fetch/pull/20)) To revert to old behaviour: 
 
 ```rust
 QueryClient::new()
-    .set_options(
+    .with_options(
         QueryOptions::default()
-            .set_stale_time(Duration::from_secs(10)
+            .with_stale_time(Duration::from_secs(10)
         )
     )
     .provide()
@@ -32,6 +32,12 @@ QueryClient::new()
     - `set_local_query` -> `set_query_local`
 - `QueryClient::invalidate_query_type` renamed `QueryClient::invalidate_query_scope` ([#24](https://github.com/zakstucke/leptos-fetch/pull/24))
 - MSRV increased to `1.85` to migrate to edition 2024 and use async closures ([#19](https://github.com/zakstucke/leptos-fetch/pull/19))
+- Chain setters returning `-> Self` standardized from `set_` to `with_` (([#34](https://github.com/zakstucke/leptos-fetch/pull/34))):
+    - `QueryClient::set_options` -> `QueryClient::with_options`
+    - `QueryScope::set_options` -> `QueryScope::with_options`
+    - `QueryOptions::set_stale_time` -> `QueryOptions::with_stale_time`
+    - `QueryOptions::set_gc_time` -> `QueryOptions::with_gc_time`
+    - `QueryOptions::set_refetch_interval` -> `QueryOptions::with_refetch_interval`
 
 ### Added
 - For `ssr`, different codecs other than `serde`/json can be used when streaming resources from the backend. Codec choice defaults to [`codee::string::JsonSerdeCodec`](https://docs.rs/codee/latest/codee/string/struct.JsonSerdeCodec.html) like before and applies to the whole `QueryClient`. `rkyv` feature added to change default to [`codee::binary::RkyvCodec`](https://docs.rs/codee/latest/codee/binary/struct.RkyvCodec.html) using the [rkyv](https://docs.rs/rkyv/latest/rkyv/) crate. Other custom codecs can be set with [`QueryClient::set_codec`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_codec). ([#10](https://github.com/zakstucke/leptos-fetch/pull/10), [#29](https://github.com/zakstucke/leptos-fetch/pull/29))
