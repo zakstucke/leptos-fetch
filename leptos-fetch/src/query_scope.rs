@@ -129,7 +129,7 @@ macro_rules! define {
                 /// Set specific [`QueryOptions`] to only apply to this query scope.
                 ///
                 /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
-                pub fn set_options(mut self, options: QueryOptions) -> Self {
+                pub fn with_options(mut self, options: QueryOptions) -> Self {
                     self.options = options;
                     self
                 }
@@ -187,7 +187,7 @@ macro_rules! define {
                 #[cfg(any(feature = "devtools", feature = "devtools-always"))]
                 /// Set a custom query scope/type title that will show in devtools.
                 #[track_caller]
-                pub fn set_title(mut self, title: impl Into<String>) -> Self {
+                pub fn with_title(mut self, title: impl Into<String>) -> Self {
                     #[cfg(any(
                         all(debug_assertions, feature = "devtools"),
                         feature = "devtools-always"

@@ -91,7 +91,7 @@ impl QueryClient<DefaultCodec> {
     ///
     /// Call [`QueryClient::set_codec()`] to set a different codec.
     ///
-    /// Call [`QueryClient::set_options()`] to set non-default options.
+    /// Call [`QueryClient::with_options()`] to set non-default options.
     #[track_caller]
     pub fn new() -> Self {
         Self {
@@ -160,7 +160,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     ///
     /// These options will be combined with any options for a specific query scope.
     #[track_caller]
-    pub fn set_options(mut self, options: QueryOptions) -> Self {
+    pub fn with_options(mut self, options: QueryOptions) -> Self {
         self.options = options;
         self
     }

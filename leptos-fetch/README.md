@@ -88,7 +88,7 @@ pub fn App() -> impl IntoView {
     // Provides the Query Client for the entire app via leptos context.
     QueryClient::new().provide();
     
-    // client.set_options(QueryOptions::new()..) can customize default behaviour.
+    // client.with_options(QueryOptions::new()..) can customize default behaviour.
     // client.set_codec::<Codec>() can be used to change the codec for streaming in ssr.
 
     // Rest of App...
@@ -212,7 +212,7 @@ The [`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.Que
 **NOTE: `stale_time` can never be greater than `gc_time`.**
 > If `stale_time` is greater than `gc_time`, `stale_time` will be set to `gc_time`.
 
-[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by calling it with [`QueryClient::set_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.set_options).
+[`QueryOptions`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryOptions.html) can be applied to the whole [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) by calling it with [`QueryClient::with_options`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.with_options).
 
 Options can also be applied to individual query scopes by wrapping query functions in either [`QueryScope`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html) or [`QueryScopeLocal`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html) and passing this scope to [`QueryClient`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html) methods.
 
@@ -230,11 +230,11 @@ use leptos::prelude::*;
 // A QueryScope/QueryScopeLocal can be used just like the function directly in QueryClient methods.
 fn track_query() -> QueryScope<i32, String> {
     QueryScope::new(get_track)
-        .set_options(
+        .with_options(
             QueryOptions::new()
-                .set_stale_time(Duration::from_secs(10))
-                .set_gc_time(Duration::from_secs(60))
-                .set_refetch_interval(Duration::from_secs(10))
+                .with_stale_time(Duration::from_secs(10))
+                .with_gc_time(Duration::from_secs(60))
+                .with_refetch_interval(Duration::from_secs(10))
         )
 }
 

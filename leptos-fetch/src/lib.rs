@@ -691,7 +691,7 @@ mod test {
                 };
                 let fetcher = QueryScope::new(
                     fetcher
-                ).set_options(QueryOptions::new().set_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)));
+                ).with_options(QueryOptions::new().with_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)));
 
                 let (client, _guard, owner) = prep_vari!(false);
 
@@ -852,7 +852,7 @@ mod test {
                 };
                 let fetcher = QueryScope::new(
                     fetcher
-                ).set_options(QueryOptions::new().set_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
+                ).with_options(QueryOptions::new().with_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
 
                 let (client, _guard, owner) = prep_vari!(false);
 
