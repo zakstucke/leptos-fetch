@@ -530,6 +530,7 @@ impl ScopeLookup {
                         if let Some(cached) = scope.get_mut(&key_hash) {
                             cached.set_value(
                                 new_value,
+                                true,
                                 #[cfg(any(
                                     all(debug_assertions, feature = "devtools"),
                                     feature = "devtools-always"
@@ -590,6 +591,7 @@ pub(crate) struct CachedOrFetchCbInput<'a, K: 'static, V: 'static> {
     pub variant: CachedOrFetchCbInputVariant,
 }
 
+#[derive(Debug)]
 pub(crate) enum CachedOrFetchCbInputVariant {
     CachedUntouched,
     CachedUpdated,

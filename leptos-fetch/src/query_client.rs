@@ -1,6 +1,11 @@
 #![allow(ungated_async_fn_track_caller)] // Want it to auto-turn on when stable
 
-use std::{borrow::Borrow, fmt::Debug, hash::Hash, sync::Arc};
+use std::{
+    borrow::Borrow,
+    fmt::Debug,
+    hash::Hash,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use codee::{Decoder, Encoder};
 use leptos::{
@@ -33,6 +38,14 @@ pub(crate) type DefaultCodec = codee::string::JsonSerdeCodec;
 
 #[cfg(feature = "rkyv")]
 pub(crate) type DefaultCodec = codee::binary::RkyvCodec;
+
+task_local::task_local! {
+    pub(crate) static ASYNC_TRACK_UPDATE_MARKER: Arc<AtomicBool>;
+}
+
+std::thread_local! {
+    pub(crate) static SYNC_TRACK_UPDATE_MARKER: AtomicBool = const { AtomicBool::new(true) };
+}
 
 /// The [`QueryClient`] stores all query data, and is used to manage queries.
 ///
@@ -620,6 +633,30 @@ impl<Codec: 'static> QueryClient<Codec> {
         resource
     }
 
+    /// Prevent reactive updates being triggered from the current updater callback fn.
+    ///
+    /// Call [`QueryClient::untrack_update_query`] in the callback of [`QueryClient::update_query`]
+    /// to prevent resources being updated after the callback completes.
+    ///
+    /// This is really useful when e.g:
+    /// - you know nothing changes after reading the existing value in the callback
+    /// - you don't want resources/subs to react and rerender, given nothings changed.
+    ///
+    /// This function is a noop outside the callbacks of:
+    /// - [`QueryClient::update_query`]
+    /// - [`QueryClient::update_query_async`]
+    /// - [`QueryClient::update_query_async_local`]
+    pub fn untrack_update_query(&self) {
+        // Set markers to false, these will all be reset to true automatically where needed.
+        SYNC_TRACK_UPDATE_MARKER.with(|marker| {
+            marker.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
+        // Ignore returned AccessError if didn't exist (not in async ctx):
+        let _ = ASYNC_TRACK_UPDATE_MARKER.try_with(|marker| {
+            marker.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     /// Prefetch a query and store it in the cache.
     ///
     /// - Entry doesn't exist: fetched and stored in the cache.
@@ -841,6 +878,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             key.borrow(),
             MaybeLocal::new(new_value),
             || MaybeLocal::new(key.borrow().clone()),
+            true,
         )
     }
 
@@ -864,6 +902,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             key.borrow(),
             MaybeLocal::new_local(new_value),
             || MaybeLocal::new_local(key.borrow().clone()),
+            true,
         )
     }
 
@@ -875,6 +914,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: &K,
         new_value: MaybeLocal<V>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        track: bool,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
@@ -895,6 +935,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(cached) = maybe_cached {
                     cached.set_value(
                         new_value,
+                        track,
                         #[cfg(any(
                             all(debug_assertions, feature = "devtools"),
                             feature = "devtools-always"
@@ -934,6 +975,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// If you want async and/or always get the value, use [`QueryClient::update_query_async`]/[`QueryClient::update_query_async_local`].
     ///
     /// Returns the output of the callback.
+    ///
+    /// If you decide you don't want to trigger resources and subscribers, e.g. if you know nothing changed,
+    /// call [`QueryClient::untrack_update_query`] in the callback to prevent reactive updates.
     #[track_caller]
     pub fn update_query<K, V, T, M>(
         &self,
@@ -945,13 +989,29 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let key = key.borrow();
-        let key_hash = KeyHash::new(key);
+        self.update_query_inner::<K, V, T>(
+            &QueryScopeInfo::new_local(&query_scope),
+            key.borrow(),
+            modifier,
+        )
+    }
 
+    #[track_caller]
+    fn update_query_inner<K, V, T>(
+        &self,
+        query_scope_info: &QueryScopeInfo,
+        key: &K,
+        modifier: impl FnOnce(Option<&mut V>) -> T,
+    ) -> T
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        let key_hash = KeyHash::new(key);
         let mut modifier_holder = Some(modifier);
 
         let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _>(
-            &QueryScopeInfo::new_local(&query_scope),
+            query_scope_info,
             false,
             |maybe_scope| {
                 if let Some(scope) = maybe_scope {
@@ -993,6 +1053,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Active resources using the query will be updated.
     ///
     /// Returns the output of the callback.
+    ///
+    /// If you decide you don't want to trigger resources and subscribers, e.g. if you know nothing changed,
+    /// call [`QueryClient::untrack_update_query`] in the callback to prevent reactive updates.
     #[track_caller]
     pub async fn update_query_async<'a, K, V, T, M>(
         &'a self,
@@ -1023,6 +1086,9 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Active resources using the query will be updated.
     ///
     /// Returns the output of the callback.
+    ///
+    /// If you decide you don't want to trigger resources and subscribers, e.g. if you know nothing changed,
+    /// call [`QueryClient::untrack_update_query`] in the callback to prevent reactive updates.
     #[track_caller]
     pub async fn update_query_async_local<'a, K, V, T, M>(
         &'a self,
@@ -1083,14 +1149,47 @@ impl<Codec: 'static> QueryClient<Codec> {
         // The fetch will "turn on" is_fetching during it's lifetime, but we also want it during the mapper function:
         self.scope_lookup
             .with_notify_fetching(query_scope_info.cache_key, key_hash, false, async {
-                let result = mapper(&mut new_value).await;
-                self.set_inner::<K, V>(
-                    query_scope_info,
-                    invalidation_prefix,
-                    key.borrow(),
-                    into_maybe_local(new_value),
-                    lazy_maybe_local_key,
-                );
+                let track = Arc::new(AtomicBool::new(true));
+                let result = ASYNC_TRACK_UPDATE_MARKER
+                    .scope(track.clone(), async { mapper(&mut new_value).await })
+                    .await;
+
+                // Cover a small edge case:
+                // - value in threadsafe
+                // - .update_query_async_local called
+                // - replacement value .set() called, stored in local cache because no type safety on threadsafe cache
+                // - now have 2 versions in both caches
+                // by trying to update first, means it'll stick with existing cache if it exists,
+                // otherwise doesn't matter and can just be set normally:
+                let mut new_value = Some(new_value);
+                let updated = self.update_query_inner::<K, V, _>(&query_scope_info, key, |value| {
+                    if let Some(value) = value {
+                        // This sync update call itself needs untracking if !track:
+                        if !track.load(std::sync::atomic::Ordering::Relaxed) {
+                            self.untrack_update_query();
+                        }
+
+                        *value = new_value.take().expect("Should be Some");
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !updated {
+                    self.set_inner::<K, V>(
+                        query_scope_info,
+                        invalidation_prefix,
+                        key.borrow(),
+                        into_maybe_local(
+                            new_value
+                                .take()
+                                .expect("Should be Some, should only be here if not updated"),
+                        ),
+                        lazy_maybe_local_key,
+                        track.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                }
+
                 result
             })
             .await
@@ -1130,8 +1229,9 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
+        let key_hash = KeyHash::new(key.borrow());
         self.scope_lookup.with_cached_query::<K, V, _>(
-            &KeyHash::new(key.borrow()),
+            &key_hash,
             &query_scope.cache_key(),
             |maybe_cached| maybe_cached.is_some(),
         )
@@ -1650,6 +1750,33 @@ impl<Codec: 'static> QueryClient<Codec> {
                 buster.try_set(new_buster_id());
             }
         }
+    }
+
+    #[cfg(test)]
+    /// Clear a specific query key.
+    #[track_caller]
+    pub fn clear_query<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> bool
+    where
+        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+            &QueryScopeInfo::new_local(&query_scope),
+            false,
+            |maybe_scope| {
+                if let Some(scope) = maybe_scope {
+                    let removed = scope.remove_entry(&KeyHash::new(key.borrow()));
+                    // Calling it again just in case because in tests might be in sync cache and non sync cache:
+                    scope.remove_entry(&KeyHash::new(key.borrow()));
+                    return removed.is_some();
+                }
+                false
+            },
+        )
     }
 
     #[cfg(test)]

@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
-    QueryOptions,
+    QueryOptions, SYNC_TRACK_UPDATE_MARKER,
     cache::ScopeLookup,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
@@ -380,6 +380,7 @@ impl<K, V> Query<K, V> {
     pub fn set_value(
         &mut self,
         new_value: MaybeLocal<V>,
+        track: bool,
         #[cfg(any(
             all(debug_assertions, feature = "devtools"),
             feature = "devtools-always"
@@ -390,6 +391,11 @@ impl<K, V> Query<K, V> {
     {
         self.update_value(
             |value| {
+                // Only need to update on false, always defaults to true:
+                if !track {
+                    SYNC_TRACK_UPDATE_MARKER
+                        .with(|marker| marker.store(false, std::sync::atomic::Ordering::Relaxed));
+                }
                 *value = new_value;
             },
             #[cfg(any(
@@ -400,6 +406,7 @@ impl<K, V> Query<K, V> {
         );
     }
 
+    /// Respects SYNC_TRACK_UPDATE_MARKER if set to false during the modifier:
     pub fn update_value<T>(
         &mut self,
         cb: impl FnOnce(&mut MaybeLocal<V>) -> T,
@@ -412,7 +419,15 @@ impl<K, V> Query<K, V> {
     where
         V: DebugIfDevtoolsEnabled + 'static,
     {
+        // Default to true instead overriden during the modifier:
+        SYNC_TRACK_UPDATE_MARKER
+            .with(|marker| marker.store(true, std::sync::atomic::Ordering::Relaxed));
+
         let result = cb(self.value_maybe_stale.value_mut());
+
+        let should_track = SYNC_TRACK_UPDATE_MARKER
+            .with(|marker| marker.load(std::sync::atomic::Ordering::Relaxed));
+
         self.value_maybe_stale.reset_callbacks(
             GcHandle::new(self.gc_cb.clone(), self.combined_options.gc_time()),
             RefetchHandle::new(
@@ -431,12 +446,15 @@ impl<K, V> Query<K, V> {
 
         self.invalidated = false;
         self.updated_at = chrono::Utc::now();
-        // To update all existing resources:
-        self.buster.set(new_buster_id());
 
-        self.scope_lookup
-            .scope_subscriptions_mut()
-            .notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
+        if should_track {
+            // To update all existing resources:
+            self.buster.set(new_buster_id());
+
+            self.scope_lookup
+                .scope_subscriptions_mut()
+                .notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
+        }
 
         result
     }
