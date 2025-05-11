@@ -37,6 +37,7 @@ paste.workspace = true
 parking_lot.workspace = true
 send_wrapper.workspace = true
 web-sys.workspace = true
+task-local.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

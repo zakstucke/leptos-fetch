@@ -568,69 +568,169 @@ mod test {
                 let (client, _guard, _owner) = prep_vari!(false);
 
                 let key = 1;
+
+                // Want to confirm by default everything triggers updates, but when using `.untrack_update_query()` magic fn for those applicable it doesn't.
+                let value_sub_react_count = Arc::new(AtomicUsize::new(0));
+                let value_sub = client.subscribe_value(&fetcher, move || key);
+                Effect::new_isomorphic({
+                    let value_sub_react_count = value_sub_react_count.clone();
+                    move || {
+                        value_sub.get();
+                        value_sub_react_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+
+                macro_rules! maybe_reacts {
+                    ($reacts:expr, $block:expr) => {{
+                        tick!();
+                        let before = value_sub_react_count.load(Ordering::Relaxed);
+                        let result = $block;
+                        tick!();
+                        let after = value_sub_react_count.load(Ordering::Relaxed);
+                        if $reacts {
+                            assert_eq!(
+                                after,
+                                before + 1,
+                                "{} != {}, didn't react like expected",
+                                after,
+                                before
+                            );
+                        } else {
+                            assert_eq!(
+                                after, before,
+                                "{} != {}, reacted when it shouldn't",
+                                after, before
+                            );
+                        }
+                        result
+                    }};
+                }
+
                 assert!(!client.query_exists(&fetcher, key));
                 client.set_query_local(&fetcher, key, 1);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(1));
-                assert!(client.update_query(&fetcher, key, |value| {
-                    value
-                        .map(|v| {
-                            *v = 2;
-                            true
-                        })
-                        .unwrap_or(false)
-                }));
+
+                maybe_reacts!(
+                    true,
+                    assert!(client.update_query(&fetcher, key, |value| {
+                        value
+                            .map(|v| {
+                                *v = 2;
+                                true
+                            })
+                            .unwrap_or(false)
+                    }))
+                );
+
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
-                client.set_query(&fetcher, key, 3);
+
+                maybe_reacts!(true, client.set_query(&fetcher, key, 3));
+
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
-                assert!(client.update_query(&fetcher, key, |value| {
-                    value
-                        .map(|v| {
-                            *v *= 2;
-                            true
-                        })
-                        .unwrap_or(false)
-                }));
+
+                maybe_reacts!(
+                    true,
+                    assert!(client.update_query(&fetcher, key, |value| {
+                        value
+                            .map(|v| {
+                                *v *= 2;
+                                true
+                            })
+                            .unwrap_or(false)
+                    }))
+                );
+
+                // Noop would react, but not if client.untrack_update_query() is used:
+                maybe_reacts!(true, client.update_query(&fetcher, key, |_value| {}));
+                maybe_reacts!(
+                    false,
+                    client.update_query(&fetcher, key, |_value| { client.untrack_update_query() })
+                );
+
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(6));
                 assert!(client.query_exists(&fetcher, key));
 
-                let key = 2;
+                assert!(client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
-                client.prefetch_query_local(&fetcher, key).await;
-                assert_eq!(client.get_cached_query(&fetcher, key), Some(4));
+
+                maybe_reacts!(true, client.prefetch_query_local(&fetcher, key).await);
+
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
                 client.clear();
                 assert_eq!(client.size(), 0);
-                client.prefetch_query(&fetcher, key).await;
-                assert_eq!(client.get_cached_query(&fetcher, key), Some(4));
+                maybe_reacts!(true, client.prefetch_query(&fetcher, key).await);
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
 
-                let key = 3;
+                assert!(client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
-                assert_eq!(client.fetch_query_local(&fetcher, key).await, 6);
+                maybe_reacts!(
+                    true,
+                    assert_eq!(client.fetch_query_local(&fetcher, key).await, 2)
+                );
                 assert!(client.query_exists(&fetcher, key));
                 client.clear();
                 assert_eq!(client.size(), 0);
-                assert_eq!(client.fetch_query(&fetcher, key).await, 6);
+                maybe_reacts!(true, assert_eq!(client.fetch_query(&fetcher, key).await, 2));
 
                 // update_query_async/update_query_async_local:
-                assert_eq!(
-                    client
-                        .update_query_async(&fetcher, key, async |value| {
-                            *value += 1;
-                            *value
-                        })
-                        .await,
-                    7
+                maybe_reacts!(
+                    true,
+                    assert_eq!(
+                        client
+                            .update_query_async(&fetcher, key, async |value| {
+                                *value += 1;
+                                *value
+                            })
+                            .await,
+                        3
+                    )
                 );
-                assert_eq!(client.get_cached_query(&fetcher, key), Some(7));
-                assert_eq!(
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
+                // Noop would react, but not if client.untrack_update_query() is used:
+                maybe_reacts!(
+                    true,
                     client
-                        .update_query_async(&fetcher, key, async |value| {
-                            *value += 1;
-                            *value
-                        })
-                        .await,
-                    8
+                        .update_query_async(&fetcher, key, async |_value| {})
+                        .await
                 );
-                assert_eq!(client.get_cached_query(&fetcher, key), Some(8));
+                maybe_reacts!(
+                    false,
+                    client
+                        .update_query_async(&fetcher, key, async |_value| {
+                            client.untrack_update_query()
+                        })
+                        .await
+                );
+
+                maybe_reacts!(
+                    true,
+                    assert_eq!(
+                        client
+                            .update_query_async_local(&fetcher, key, async |value| {
+                                *value += 1;
+                                *value
+                            })
+                            .await,
+                        4
+                    )
+                );
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(4));
+                // Noop would react, but not if client.untrack_update_query() is used:
+                maybe_reacts!(
+                    true,
+                    client
+                        .update_query_async_local(&fetcher, key, async |_value| {})
+                        .await
+                );
+                maybe_reacts!(
+                    false,
+                    client
+                        .update_query_async_local(&fetcher, key, async |_value| {
+                            client.untrack_update_query()
+                        })
+                        .await
+                );
+
                 // is_fetching should be true throughout the whole lifetime of update_query_async, even the external async section:
                 let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), move || key);
                 assert!(!is_fetching.get_untracked());
@@ -645,7 +745,7 @@ mod test {
                                     *value
                                 })
                                 .await,
-                            9
+                            5
                         );
                     },
                     async {

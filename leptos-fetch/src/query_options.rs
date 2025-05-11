@@ -21,9 +21,7 @@ impl QueryOptions {
     ///
     /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
     ///
-    /// To never mark as stale, set [`std::time::Duration::MAX`].
-    ///
-    /// Default: `10 seconds`
+    /// Default: `never`
     #[track_caller]
     pub fn with_stale_time(mut self, stale_time: std::time::Duration) -> Self {
         if let Some(gc_time) = self.gc_time {
@@ -72,7 +70,7 @@ impl QueryOptions {
     ///
     /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
     ///
-    /// Default: `10 seconds`
+    /// Default: `never`
     pub fn stale_time(&self) -> std::time::Duration {
         self.stale_time.unwrap_or(DEFAULT_STALE_TIME)
     }
