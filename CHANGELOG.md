@@ -8,7 +8,7 @@ All notable changes to this project are documented in this file.
 
 ## [0.4.2](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.2)
 
-### Fixed
+### Added
 - New [`QueryClient::untrack_update_query`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.fetch_query_local) method to prevent reactive updates being triggered from the current updater callback fn context. (([#39](https://github.com/zakstucke/leptos-fetch/pull/39)))
 
 ---
