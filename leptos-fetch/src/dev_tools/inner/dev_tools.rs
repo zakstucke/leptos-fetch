@@ -562,7 +562,7 @@ fn SearchInput(
             </div>
             <input
                 id=if let Some(cache_key) = maybe_cache_key {
-                    format!("search-{:?}", cache_key)
+                    format!("search-{cache_key:?}")
                 } else {
                     "search".to_string()
                 }

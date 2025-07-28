@@ -349,7 +349,7 @@ mod test {
 
                     println!("{} deadlocks detected", deadlocks.len());
                     for (i, threads) in deadlocks.iter().enumerate() {
-                        println!("Deadlock #{}", i);
+                        println!("Deadlock #{i}");
                         for t in threads {
                             println!("Thread Id {:#?}", t.thread_id());
                             println!("{:#?}", t.backtrace());
@@ -1670,7 +1670,7 @@ mod test {
                 assert_eq!(num_calls.load(Ordering::Relaxed), 2);
                 assert_eq!(num_completed_calls.load(Ordering::Relaxed), 1);
                 // Should not be invalid because the underlying query was refetched:
-                assert!(!client.is_key_invalid(query_scope.clone(), &()));
+                assert!(!client.is_key_invalid(query_scope.clone(), ()));
 
                 // In general we treat update functions as resetting any invalid = true,
                 // however if an async update user fn test, need to check that:
@@ -1725,7 +1725,7 @@ mod test {
                 // If this is invalidated, it should also invalidate the child resource.
                 let fetcher = fetcher.with_invalidation_link(|_key| vec!["base", "users"]);
                 client.fetch_query(&fetcher, &2).await;
-                assert!(!client.is_key_invalid(&fetcher, &2));
+                assert!(!client.is_key_invalid(&fetcher, 2));
 
                 // If this is invalidated, it'll invalidate both the main fetcher and the child resource.
                 let hierarchy_parent_scope =
@@ -1733,7 +1733,7 @@ mod test {
                 client
                     .fetch_query(hierarchy_parent_scope.clone(), &())
                     .await;
-                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, ()));
 
                 // If this is invalidated, it shouldn't affect either of the others, as it's the lowest in the invalidation hierarchy.
                 let hierarchy_child_scope = QueryScope::new(async |user_id| user_id)
@@ -1743,13 +1743,13 @@ mod test {
                 client
                     .fetch_query(hierarchy_child_scope.clone(), &100)
                     .await;
-                assert!(!client.is_key_invalid(&hierarchy_child_scope, &100));
+                assert!(!client.is_key_invalid(&hierarchy_child_scope, 100));
 
                 client.invalidate_query(&hierarchy_parent_scope, ());
                 tick!();
-                assert!(client.is_key_invalid(&hierarchy_parent_scope, &()));
-                assert!(client.is_key_invalid(&fetcher, &2));
-                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
+                assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
+                assert!(client.is_key_invalid(&fetcher, 2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, 100));
 
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
@@ -1760,9 +1760,9 @@ mod test {
 
                 client.invalidate_query(&fetcher, 2);
                 tick!();
-                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
-                assert!(client.is_key_invalid(&fetcher, &2));
-                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, ()));
+                assert!(client.is_key_invalid(&fetcher, 2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, 100));
 
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
@@ -1773,9 +1773,9 @@ mod test {
 
                 client.invalidate_query(&hierarchy_child_scope, 100);
                 tick!();
-                assert!(!client.is_key_invalid(&hierarchy_parent_scope, &()));
-                assert!(!client.is_key_invalid(&fetcher, &2));
-                assert!(client.is_key_invalid(&hierarchy_child_scope, &100));
+                assert!(!client.is_key_invalid(&hierarchy_parent_scope, ()));
+                assert!(!client.is_key_invalid(&fetcher, 2));
+                assert!(client.is_key_invalid(&hierarchy_child_scope, 100));
             })
             .await;
     }
@@ -2062,8 +2062,7 @@ mod test {
                     assert_eq!(
                         fetch_calls.load(Ordering::Relaxed),
                         1,
-                        "{:?}ms",
-                        maybe_sleep_ms
+                        "{maybe_sleep_ms:?}ms"
                     );
                 }
             })

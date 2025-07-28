@@ -57,8 +57,8 @@ pub(crate) struct DebugValue {
 impl DebugValue {
     pub fn new<T: std::fmt::Debug>(value: &T) -> Self {
         Self {
-            pretty: std::sync::Arc::new(format!("{:#?}", value)),
-            compact: std::sync::Arc::new(format!("{:?}", value)),
+            pretty: std::sync::Arc::new(format!("{value:#?}")),
+            compact: std::sync::Arc::new(format!("{value:?}")),
         }
     }
 

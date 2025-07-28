@@ -80,7 +80,7 @@ pub(crate) enum EventVariant {
 impl fmt::Display for EventVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EventVariant::Fetched { elapsed_ms } => write!(f, "fetched in {}ms", elapsed_ms),
+            EventVariant::Fetched { elapsed_ms } => write!(f, "fetched in {elapsed_ms}ms"),
             EventVariant::DeclarativeUpdate => write!(f, "declarative update"),
             EventVariant::DeclarativeSet => write!(f, "declarative set"),
             EventVariant::StreamedFromServer => write!(f, "streamed from server"),
