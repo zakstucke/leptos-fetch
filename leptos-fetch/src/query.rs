@@ -12,12 +12,13 @@ use send_wrapper::SendWrapper;
 use crate::{
     QueryOptions, SYNC_TRACK_UPDATE_MARKER,
     cache::ScopeLookup,
+    cache_scope::InvalidationType,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     safe_dt_dur_add,
-    utils::{KeyHash, new_buster_id},
+    utils::{KeyHash, ResetInvalidated, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
 };
 
@@ -42,6 +43,7 @@ pub(crate) struct Query<K, V: 'static> {
         feature = "devtools-always"
     ))]
     pub events: crate::events::Events,
+    pub fetch_invalidate_tx: Option<futures::channel::oneshot::Sender<InvalidationType>>,
 }
 
 impl<K, V> Drop for Query<K, V> {
@@ -227,7 +229,7 @@ impl<K, V> Query<K, V> {
                         // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
                         if let Some(scope) = maybe_scope {
                             if let Some(cached) = scope.get_mut(&key_hash) {
-                                cached.invalidate();
+                                cached.invalidate(InvalidationType::Invalidate);
                                 #[cfg(any(
                                     all(debug_assertions, feature = "devtools"),
                                     feature = "devtools-always"
@@ -270,12 +272,18 @@ impl<K, V> Query<K, V> {
             scope_lookup,
             cache_key,
             key_hash,
+            fetch_invalidate_tx: None,
         }
     }
 
     #[cfg(test)]
     pub fn is_invalidated(&self) -> bool {
         self.invalidated
+    }
+
+    #[cfg(test)]
+    pub fn mark_valid(&mut self) {
+        self.invalidated = false;
     }
 
     pub fn mark_resource_active(&self, resource_id: u64) {
@@ -314,7 +322,7 @@ impl<K, V> Query<K, V> {
         let _ = total_active;
     }
 
-    pub fn invalidate(&mut self) {
+    pub fn invalidate(&mut self, invalidation_type: InvalidationType) {
         if !self.invalidated {
             self.invalidated = true;
             // To re-trigger all active resources automatically on manual invalidation:
@@ -341,7 +349,7 @@ impl<K, V> Query<K, V> {
                         let mut scopes = scope_lookup.scopes_mut();
                         for (cache_key, key_hashes) in invalidation_map {
                             if let Some(scope) = scopes.get_mut(&cache_key) {
-                                scope.invalidate_queries(key_hashes);
+                                scope.invalidate_queries(key_hashes, invalidation_type);
                             }
                         }
                     });
@@ -357,6 +365,10 @@ impl<K, V> Query<K, V> {
                     crate::events::EventVariant::Invalidated,
                 ));
             }
+        }
+        // Invalidate any in-flight fetch if there is one:
+        if let Some(invalidate_tx) = self.fetch_invalidate_tx.take() {
+            let _ = invalidate_tx.send(invalidation_type);
         }
     }
 
@@ -386,6 +398,7 @@ impl<K, V> Query<K, V> {
             feature = "devtools-always"
         ))]
         event: crate::events::Event,
+        reset_invalidated: ResetInvalidated,
     ) where
         V: DebugIfDevtoolsEnabled + 'static,
     {
@@ -403,6 +416,7 @@ impl<K, V> Query<K, V> {
                 feature = "devtools-always"
             ))]
             event,
+            reset_invalidated,
         );
     }
 
@@ -415,6 +429,7 @@ impl<K, V> Query<K, V> {
             feature = "devtools-always"
         ))]
         event: crate::events::Event,
+        reset_invalidated: ResetInvalidated,
     ) -> T
     where
         V: DebugIfDevtoolsEnabled + 'static,
@@ -444,7 +459,9 @@ impl<K, V> Query<K, V> {
             self.events.push(event);
         }
 
-        self.invalidated = false;
+        if matches!(reset_invalidated, ResetInvalidated::Reset) {
+            self.invalidated = false;
+        }
         self.updated_at = chrono::Utc::now();
 
         if should_track {
@@ -457,5 +474,12 @@ impl<K, V> Query<K, V> {
         }
 
         result
+    }
+
+    pub fn set_fetch_invalidate_tx(
+        &mut self,
+        invalidate_tx: futures::channel::oneshot::Sender<InvalidationType>,
+    ) {
+        self.fetch_invalidate_tx = Some(invalidate_tx);
     }
 }

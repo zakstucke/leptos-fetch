@@ -18,5 +18,5 @@ fn main() {
         Channel::Dev => "CHANNEL_DEV",
     };
     // Setting the correct flag:
-    println!("cargo:rustc-cfg={}", channel)
+    println!("cargo:rustc-cfg={channel}")
 }
