@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "leptos-fetch"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "any_spawner",
  "chrono",
