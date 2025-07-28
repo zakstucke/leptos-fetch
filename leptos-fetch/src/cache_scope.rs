@@ -1,14 +1,75 @@
 use std::{collections::HashMap, sync::Arc, thread::ThreadId};
 
 use crate::{
-    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, query::Query,
-    query_scope::QueryScopeInfo, utils::KeyHash,
+    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, maybe_local::MaybeLocal,
+    query::Query, query_scope::QueryScopeInfo, utils::KeyHash,
 };
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum QueryOrPending<K, V: 'static> {
+    Query(Query<K, V>),
+    Pending {
+        invalidate_tx: Option<futures::channel::oneshot::Sender<InvalidationType>>,
+        key: MaybeLocal<K>,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum InvalidationType {
+    Clear,
+    Invalidate,
+}
+
+impl<K, V> QueryOrPending<K, V> {
+    pub fn as_query(&self) -> Option<&Query<K, V>> {
+        if let QueryOrPending::Query(query) = self {
+            Some(query)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_query_mut(&mut self) -> Option<&mut Query<K, V>> {
+        if let QueryOrPending::Query(query) = self {
+            Some(query)
+        } else {
+            None
+        }
+    }
+
+    pub fn into_query(self) -> Option<Query<K, V>> {
+        if let QueryOrPending::Query(query) = self {
+            Some(query)
+        } else {
+            None
+        }
+    }
+
+    pub fn invalidate(&mut self, invalidation_type: InvalidationType) {
+        match self {
+            QueryOrPending::Pending { invalidate_tx, .. } => {
+                // Invalidate any in-flight fetch if there is still one:
+                if let Some(invalidate_tx) = invalidate_tx.take() {
+                    let _ = invalidate_tx.send(invalidation_type);
+                }
+            }
+            QueryOrPending::Query(query) => query.invalidate(invalidation_type),
+        }
+    }
+
+    pub fn key(&self) -> &MaybeLocal<K> {
+        match self {
+            QueryOrPending::Query(query) => query.key(),
+            QueryOrPending::Pending { key, .. } => key,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct Scope<K: 'static, V: 'static> {
-    threadsafe_cache: HashMap<KeyHash, Query<K, V>>,
-    local_caches: HashMap<ThreadId, HashMap<KeyHash, Query<K, V>>>,
+    threadsafe_cache: HashMap<KeyHash, QueryOrPending<K, V>>,
+    local_caches: HashMap<ThreadId, HashMap<KeyHash, QueryOrPending<K, V>>>,
     // To make sure parallel fetches for the same key aren't happening across different resources.
     pub fetcher_mutexes: HashMap<KeyHash, Arc<futures::lock::Mutex<()>>>,
     scope_lookup: ScopeLookup,
@@ -31,15 +92,22 @@ where
     }
 
     pub fn all_queries(&self) -> impl Iterator<Item = &Query<K, V>> {
-        self.threadsafe_cache.values().chain(
-            self.local_caches
-                .get(&std::thread::current().id())
-                .into_iter()
-                .flat_map(|local_cache| local_cache.values()),
-        )
+        self.threadsafe_cache
+            .values()
+            .filter_map(QueryOrPending::as_query)
+            .chain(
+                self.local_caches
+                    .get(&std::thread::current().id())
+                    .into_iter()
+                    .flat_map(|local_cache| {
+                        local_cache.values().filter_map(QueryOrPending::as_query)
+                    }),
+            )
     }
 
-    pub fn all_queries_mut(&mut self) -> impl Iterator<Item = &mut Query<K, V>> {
+    pub fn all_queries_mut_include_pending(
+        &mut self,
+    ) -> impl Iterator<Item = &mut QueryOrPending<K, V>> {
         self.threadsafe_cache.values_mut().chain(
             self.local_caches
                 .get_mut(&std::thread::current().id())
@@ -53,9 +121,10 @@ where
             self.local_caches
                 .entry(std::thread::current().id())
                 .or_default()
-                .insert(key_hash, query);
+                .insert(key_hash, QueryOrPending::Query(query));
         } else {
-            self.threadsafe_cache.insert(key_hash, query);
+            self.threadsafe_cache
+                .insert(key_hash, QueryOrPending::Query(query));
         }
         self.scope_lookup
             .scope_subscriptions_mut()
@@ -90,16 +159,48 @@ where
         }
     }
 
+    pub fn insert_pending(
+        &mut self,
+        key: MaybeLocal<K>,
+        invalidate_tx: futures::channel::oneshot::Sender<InvalidationType>,
+        key_hash: KeyHash,
+    ) {
+        let is_local = key.is_local();
+        let pending = QueryOrPending::Pending {
+            invalidate_tx: Some(invalidate_tx),
+            key,
+        };
+        if is_local {
+            self.local_caches
+                .entry(std::thread::current().id())
+                .or_default()
+                .insert(key_hash, pending);
+        } else {
+            self.threadsafe_cache.insert(key_hash, pending);
+        }
+    }
+
     pub fn get(&self, key_hash: &KeyHash) -> Option<&Query<K, V>> {
         // Threadsafe always takes priority:
-        self.threadsafe_cache.get(key_hash).or_else(|| {
-            self.local_caches
-                .get(&std::thread::current().id())
-                .and_then(|local_cache| local_cache.get(key_hash))
-        })
+        self.threadsafe_cache
+            .get(key_hash)
+            .or_else(|| {
+                self.local_caches
+                    .get(&std::thread::current().id())
+                    .and_then(|local_cache| local_cache.get(key_hash))
+            })
+            .and_then(QueryOrPending::as_query)
     }
 
     pub fn get_mut(&mut self, key_hash: &KeyHash) -> Option<&mut Query<K, V>> {
+        self.get_mut_include_pending(key_hash)
+            .and_then(QueryOrPending::as_query_mut)
+    }
+
+    pub fn get_mut_include_pending(
+        &mut self,
+        key_hash: &KeyHash,
+    ) -> Option<&mut QueryOrPending<K, V>> {
         // Threadsafe always takes priority:
         self.threadsafe_cache.get_mut(key_hash).or_else(|| {
             self.local_caches
@@ -113,11 +214,14 @@ where
         self.local_caches
             .get_mut(&std::thread::current().id())
             .and_then(|local_cache| local_cache.get_mut(key_hash))
+            .and_then(QueryOrPending::as_query_mut)
     }
 
     /// Should use this and the threadsafe one if updating the value, have to be separated.
     pub fn get_mut_threadsafe_only(&mut self, key_hash: &KeyHash) -> Option<&mut Query<K, V>> {
-        self.threadsafe_cache.get_mut(key_hash)
+        self.threadsafe_cache
+            .get_mut(key_hash)
+            .and_then(QueryOrPending::as_query_mut)
     }
 
     pub fn contains_key(&self, key_hash: &KeyHash) -> bool {
@@ -131,15 +235,16 @@ where
     }
 
     pub fn remove_entry(&mut self, key_hash: &KeyHash) -> Option<(KeyHash, Query<K, V>)> {
-        let result = if let Some(query) = self.threadsafe_cache.remove_entry(key_hash) {
-            // Threadsafe always takes priority:
-            Some(query)
+        // Threadsafe always takes priority:
+        if let Some((key_hash, query)) = self.threadsafe_cache.remove_entry(key_hash) {
+            query.into_query().map(|query| (key_hash, query))
         } else if let Some(local_cache) = self.local_caches.get_mut(&std::thread::current().id()) {
-            local_cache.remove_entry(key_hash)
+            local_cache
+                .remove_entry(key_hash)
+                .and_then(|(key_hash, query)| query.into_query().map(|query| (key_hash, query)))
         } else {
             None
-        };
-        result
+        }
     }
 
     pub fn is_empty(&self) -> bool {

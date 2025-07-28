@@ -6,22 +6,23 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use futures::FutureExt;
 use leptos::prelude::ArcRwSignal;
 
 use crate::{
     QueryOptions,
-    cache_scope::Scope,
+    cache_scope::{InvalidationType, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{KeyHash, OnDrop, new_buster_id, new_scope_id},
+    utils::{KeyHash, OnDrop, ResetInvalidated, new_buster_id, new_scope_id},
 };
 
 pub(crate) trait Busters: 'static {
-    fn invalidate_scope(&mut self);
+    fn invalidate_scope(&mut self, invalidation_type: InvalidationType);
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
@@ -31,9 +32,9 @@ where
     K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
-    fn invalidate_scope(&mut self) {
-        for query in self.all_queries_mut() {
-            query.invalidate();
+    fn invalidate_scope(&mut self, invalidation_type: InvalidationType) {
+        for query in self.all_queries_mut_include_pending() {
+            query.invalidate(invalidation_type);
         }
     }
 
@@ -58,7 +59,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         feature = "devtools-always"
     ))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery>;
-    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>);
+    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>, invalidation_type: InvalidationType);
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -104,10 +105,14 @@ where
             .collect::<Vec<_>>()
     }
 
-    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>) {
+    fn invalidate_queries(
+        &mut self,
+        key_hashes: Vec<KeyHash>,
+        invalidation_type: InvalidationType,
+    ) {
         for key_hash in key_hashes {
             if let Some(query) = self.get_mut(&key_hash) {
-                query.invalidate();
+                query.invalidate(invalidation_type);
             }
         }
     }
@@ -393,6 +398,29 @@ impl ScopeLookup {
         }
     }
 
+    pub fn prepare_invalidation_channel<K, V>(
+        &self,
+        query_scope_info: &QueryScopeInfo,
+        key_hash: KeyHash,
+        maybe_local_key: &MaybeLocal<K>,
+    ) -> futures::channel::oneshot::Receiver<InvalidationType>
+    where
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        let (invalidate_tx, invalidate_rx) =
+            futures::channel::oneshot::channel::<InvalidationType>();
+        self.with_cached_scope_mut::<K, V, _>(query_scope_info, true, |scope| {
+            let scope = scope.expect("provided a default");
+            if let Some(cached) = scope.get_mut(&key_hash) {
+                cached.set_fetch_invalidate_tx(invalidate_tx);
+            } else {
+                scope.insert_pending((*maybe_local_key).clone(), invalidate_tx, key_hash);
+            }
+        });
+        invalidate_rx
+    }
+
     pub async fn cached_or_fetch<K, V, T>(
         &self,
         client_options: QueryOptions,
@@ -401,7 +429,7 @@ impl ScopeLookup {
         query_scope_info: &QueryScopeInfo,
         invalidation_prefix: Option<Vec<String>>,
         key: &K,
-        fetcher: impl AsyncFnOnce(K) -> MaybeLocal<V>,
+        fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
@@ -498,12 +526,29 @@ impl ScopeLookup {
                     }
                 }
 
+                let maybe_local_key = lazy_maybe_local_key();
+
                 let new_value = self
                     .with_notify_fetching(
                         query_scope_info.cache_key,
                         key_hash,
                         loading_first_time,
-                        fetcher(key.clone()),
+                        // Call the fetcher, but reset and repeat if an invalidation occurs whilst in-flight:
+                        async {
+                            loop {
+                                let invalidate_rx = self.prepare_invalidation_channel::<K, V>(
+                                    query_scope_info,
+                                    key_hash,
+                                    &maybe_local_key,
+                                );
+                                futures::select! {
+                                    new_value = fetcher(key.clone()).fuse() => {
+                                        break new_value;
+                                    },
+                                    _ = invalidate_rx.fuse() => {}
+                                }
+                            }
+                        },
                     )
                     .await;
 
@@ -538,6 +583,7 @@ impl ScopeLookup {
                                 crate::events::Event::new(crate::events::EventVariant::Fetched {
                                     elapsed_ms,
                                 }),
+                                ResetInvalidated::Reset,
                             );
                             return_cb(CachedOrFetchCbInput {
                                 cached,
@@ -553,7 +599,7 @@ impl ScopeLookup {
                                     query_scope_info,
                                     invalidation_prefix,
                                     key_hash,
-                                    lazy_maybe_local_key(),
+                                    maybe_local_key,
                                     new_value,
                                     buster_if_uncached
                                         .expect("loading_first_time means this is Some(). (bug)"),

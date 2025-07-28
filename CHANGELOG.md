@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+
+### Fixed
+- Fixed some edge-case invalidation semantics (([#41](https://github.com/zakstucke/leptos-fetch/pull/41))):
+    - When an async query function is loading and `QueryClient::clear`/`QueryClient::invalidate_*` is called, the query is aborted and recalled internally, to prevent the stale query/data being misrepresented as fresh. Applies when resources are loading queries, `QueryClient::fetch_query_*`, `QueryClient::prefetch_query*`, the query loading portion of `QueryClient::update_query_async*` etc.
+    - Whilst the user-defined mapping async function in `QueryClient::update_query_async*` etc is running, and `QueryClient::clear` is called, the updated value will not be written to the cache and propagated, as the query being operated on existed prior to the `clear` call, to prevent old data being misrepresented as fresh.
+    - The `QueryClient::update_query*` methods, when updating an existing query, were incorrectly resetting the `invalidated` status of queries, they now correctly do not affect the existing `invalidated` values. Likewise the `QueryClient::set_query*` methods no longer reset the invalidated status, as the new data does not come from the source query function.
+- Fix `QueryClient::set_query` behaviour when overwriting a value that had previously been set with `QueryClient::set_query_local` or some other local setter.
+
 ---
 
 ## [0.4.2](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.2)
@@ -24,7 +32,7 @@ All notable changes to this project are documented in this file.
 
 ### BREAKING
 - Upgrade to `leptos-0.8.0` ([#37](https://github.com/zakstucke/leptos-fetch/pull/37))
-- Changes required for the custom codec feature for correct type inferrence. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
+- Changes required for the custom codec feature for correct type inference. ([#10](https://github.com/zakstucke/leptos-fetch/pull/10))
     - Replaced `QueryClient::new_with_options` + `QueryClient::provide_with_options` with `QueryClient::with_options(self, options) -> Self`, e.g. `QueryClient::new().with_options(..)`. 
     - Replaced `QueryClient::provide()` with `QueryClient::provide(self) -> Self`, e.g. `QueryClient::new().provide()`. 
     - `QueryClient::expect()` removed, `expect_context::<QueryClient>()` directly from leptos should be used instead. 

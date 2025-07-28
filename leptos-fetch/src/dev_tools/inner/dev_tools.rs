@@ -11,6 +11,7 @@ use super::{
 
 use crate::{
     QueryClient,
+    cache_scope::InvalidationType,
     query_scope::ScopeCacheKey,
     safe_dt_dur_add,
     utils::{KeyHash, new_buster_id},
@@ -974,7 +975,11 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                         .scopes_mut()
                                         .get_mut(&cache_key)
                                     {
-                                        scope.invalidate_queries(vec![key_hash]);
+                                        scope
+                                            .invalidate_queries(
+                                                vec![key_hash],
+                                                InvalidationType::Invalidate,
+                                            );
                                     }
                                 }
                             }

@@ -97,3 +97,8 @@ where
         }
     }
 }
+
+pub(crate) enum ResetInvalidated {
+    Reset,
+    NoReset,
+}

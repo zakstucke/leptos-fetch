@@ -47,6 +47,7 @@ pub use query_scope::{QueryScope, QueryScopeLocal};
 mod test {
     use std::{
         fmt::Debug,
+        hash::Hash,
         marker::PhantomData,
         ptr::NonNull,
         sync::{
@@ -55,6 +56,7 @@ mod test {
         },
     };
 
+    use futures::future::Either;
     use hydration_context::{
         PinnedFuture, PinnedStream, SerializedDataId, SharedContext, SsrSharedContext,
     };
@@ -64,7 +66,7 @@ mod test {
 
     use rstest::*;
 
-    use crate::utils::OnDrop;
+    use crate::{query_scope::QueryScopeLocalTrait, utils::OnDrop};
 
     use super::*;
 
@@ -257,6 +259,38 @@ mod test {
         Scope,
         Predicate,
         All,
+        Clear,
+    }
+
+    impl InvalidationType {
+        fn invalidate<K, V, M>(
+            &self,
+            client: &QueryClient,
+            query_scope: impl QueryScopeLocalTrait<K, V, M>,
+            key: &K,
+        ) where
+            K: Debug + Hash + PartialEq + Eq + 'static,
+            V: Debug + Clone + 'static,
+        {
+            match self {
+                InvalidationType::Query => {
+                    client.invalidate_query(query_scope, key);
+                }
+                InvalidationType::Scope => {
+                    client.invalidate_query_scope(query_scope);
+                }
+                InvalidationType::Predicate => {
+                    client
+                        .invalidate_queries_with_predicate(query_scope, |test_key| test_key == key);
+                }
+                InvalidationType::All => {
+                    client.invalidate_all_queries();
+                }
+                InvalidationType::Clear => {
+                    client.clear();
+                }
+            }
+        }
     }
 
     macro_rules! vari_new_resource_with_cb {
@@ -610,6 +644,7 @@ mod test {
                 client.set_query_local(&fetcher, key, 1);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(1));
 
+                client.invalidate_query(&fetcher, key);
                 maybe_reacts!(
                     true,
                     assert!(client.update_query(&fetcher, key, |value| {
@@ -621,10 +656,16 @@ mod test {
                             .unwrap_or(false)
                     }))
                 );
+                // update_query shouldn't have reset the invalidated status:
+                assert!(client.is_key_invalid(&fetcher, key));
 
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
 
-                maybe_reacts!(true, client.set_query(&fetcher, key, 3));
+                // set_update_query shouldn't have reset the invalidated status:
+                assert!(client.is_key_invalid(&fetcher, key));
+                // maybe_reacts!(true, client.set_query(&fetcher, key, 3));
+                client.set_query(&fetcher, key, 3);
+                assert!(client.is_key_invalid(&fetcher, key));
 
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
 
@@ -1461,7 +1502,8 @@ mod test {
             InvalidationType::Query,
             InvalidationType::Scope,
             InvalidationType::Predicate,
-            InvalidationType::All
+            InvalidationType::All,
+            InvalidationType::Clear
         )]
         invalidation_type: InvalidationType,
     ) {
@@ -1494,26 +1536,17 @@ mod test {
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
-                            match invalidation_type {
-                                InvalidationType::Query => {
-                                    client.invalidate_query(fetcher.clone(), &2);
-                                }
-                                InvalidationType::Scope => {
-                                    client.invalidate_query_scope(fetcher.clone());
-                                }
-                                InvalidationType::Predicate => {
-                                    client.invalidate_queries_with_predicate(fetcher.clone(), |key| key == &2);
-                                }
-                                InvalidationType::All => {
-                                    client.invalidate_all_queries();
-                                }
-                            }
+                            invalidation_type.invalidate(&client, fetcher.clone(), &2);
 
-                            // Because it should now be stale, not gc'd,
+                            // Other than clear, because it should now be stale, not gc'd,
                             // sync fns on a new resource instance should still return the value, it just means a background refresh has been triggered:
                             let resource2 = $get_resource();
                             tick!();
-                            assert_eq!(resource2.get_untracked(), Some(4));
+                            if matches!(invalidation_type, InvalidationType::Clear) {
+                                assert_eq!(resource2.get_untracked(), None);
+                            } else {
+                                assert_eq!(resource2.get_untracked(), Some(4));
+                            }
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             // Because the resource should've been auto invalidated, a tick should cause it to auto refetch:
@@ -1534,6 +1567,148 @@ mod test {
                     resource_type,
                     arc
                 );
+            })
+            .await;
+    }
+
+    enum FetchQueryType {
+        Fetch,
+        Prefetch,
+        UpdateAsync,
+        UpdateAsyncLocal,
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_invalidation_during_inflight_queries(
+        #[values(
+            FetchQueryType::Fetch,
+            FetchQueryType::Prefetch,
+            FetchQueryType::UpdateAsync,
+            FetchQueryType::UpdateAsyncLocal
+        )]
+        fetch_query_type: FetchQueryType,
+        #[values(
+            InvalidationType::Query,
+            InvalidationType::Scope,
+            InvalidationType::Predicate,
+            InvalidationType::All,
+            InvalidationType::Clear
+        )]
+        invalidation_type: InvalidationType,
+    ) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _guard, _owner) = prep_vari!(false);
+
+                const FETCH_SLEEP_MS: u64 = 200;
+                const UPDATE_SLEEP_MS: u64 = 200;
+
+                let num_calls = Arc::new(AtomicUsize::new(0));
+                let num_completed_calls = Arc::new(AtomicUsize::new(0));
+                let query_scope = {
+                    let num_calls = num_calls.clone();
+                    let num_completed_calls = num_completed_calls.clone();
+                    move || {
+                        let num_calls = num_calls.clone();
+                        let num_completed_calls = num_completed_calls.clone();
+                        async move {
+                            num_calls.fetch_add(1, Ordering::Relaxed);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS))
+                                .await;
+                            num_completed_calls.fetch_add(1, Ordering::Relaxed);
+                            "initial_value"
+                        }
+                    }
+                };
+
+                let get_fetch_fut = || match fetch_query_type {
+                    FetchQueryType::Fetch => Either::Left(Either::Left(async {
+                        client.fetch_query(query_scope.clone(), ()).await;
+                    })),
+                    FetchQueryType::Prefetch => Either::Left(Either::Right(async {
+                        client.prefetch_query(query_scope.clone(), ()).await;
+                    })),
+                    FetchQueryType::UpdateAsync => Either::Right(Either::Left(async {
+                        client
+                            .update_query_async(query_scope.clone(), (), async |value| {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    UPDATE_SLEEP_MS,
+                                ))
+                                .await;
+                                *value = "modified_value";
+                            })
+                            .await;
+                    })),
+                    FetchQueryType::UpdateAsyncLocal => Either::Right(Either::Right(async {
+                        client
+                            .update_query_async_local(query_scope.clone(), (), async |value| {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    UPDATE_SLEEP_MS,
+                                ))
+                                .await;
+                                *value = "modified_value";
+                            })
+                            .await;
+                    })),
+                };
+
+                let (_, _) = tokio::join!(
+                    async {
+                        // Wait for the fetch to start before invalidating:
+                        tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS / 2))
+                            .await;
+                        invalidation_type.invalidate(&client, query_scope.clone(), &());
+                    },
+                    async {
+                        get_fetch_fut().await;
+                    }
+                );
+
+                // The invalidation should have forced the in-flight query to be cancelled, and a replacement fired.
+                assert_eq!(num_calls.load(Ordering::Relaxed), 2);
+                assert_eq!(num_completed_calls.load(Ordering::Relaxed), 1);
+                // Should not be invalid because the underlying query was refetched:
+                assert!(!client.is_key_invalid(query_scope.clone(), &()));
+
+                // In general we treat update functions as resetting any invalid = true,
+                // however if an async update user fn test, need to check that:
+                // - when cleared during the user update async fn (after the query pull), the value isn't set, as would be stale
+                // - opposite for invalidate, these should still be set, as should make the invalidated query "less stale", shouldn't override the new invalidated status though.
+                if matches!(fetch_query_type, FetchQueryType::UpdateAsync)
+                    || matches!(fetch_query_type, FetchQueryType::UpdateAsyncLocal)
+                {
+                    assert_eq!(
+                        client.get_cached_query(query_scope.clone(), ()),
+                        Some("modified_value")
+                    );
+                    // Clear so the fetch sleep should be accounted for below:
+                    client.clear();
+                    let (_, _) = tokio::join!(
+                        async {
+                            // Wait for the user update async fn to start before invalidating:
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                FETCH_SLEEP_MS + (UPDATE_SLEEP_MS / 2),
+                            ))
+                            .await;
+                            invalidation_type.invalidate(&client, query_scope.clone(), &());
+                        },
+                        async {
+                            get_fetch_fut().await;
+                        }
+                    );
+                    if matches!(invalidation_type, InvalidationType::Clear) {
+                        assert_eq!(client.get_cached_query(query_scope.clone(), ()), None);
+                    } else {
+                        assert_eq!(
+                            client.get_cached_query(query_scope.clone(), ()),
+                            Some("modified_value")
+                        );
+                        // Should still be invalid:
+                        assert!(client.is_key_invalid(query_scope.clone(), ()));
+                    }
+                }
             })
             .await;
     }
