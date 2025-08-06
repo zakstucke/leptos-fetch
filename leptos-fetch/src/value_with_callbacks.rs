@@ -64,6 +64,8 @@ impl GcHandle {
         if let Some(gc_cb) = gc_cb {
             #[cfg(any(not(test), target_arch = "wasm32"))]
             {
+                use crate::utils::safe_set_timeout;
+
                 let handle = Arc::new(Mutex::new(None));
                 fn call(
                     handle: Arc<Mutex<Option<TimeoutHandle>>>,
@@ -73,24 +75,18 @@ impl GcHandle {
                     let gced = gc_cb();
                     if !gced {
                         let handle_clone = handle.clone();
-                        *handle.lock() = Some(
-                            leptos::prelude::set_timeout_with_handle(
-                                move || call(handle_clone, gc_cb, duration),
-                                duration,
-                            )
-                            .expect("leptos::prelude::set_timeout_with_handle() failed to spawn"),
-                        );
+                        *handle.lock() = Some(safe_set_timeout(
+                            move || call(handle_clone, gc_cb, duration),
+                            duration,
+                        ));
                     }
                 }
 
                 let handle_clone = handle.clone();
-                *handle.lock() = Some(
-                    leptos::prelude::set_timeout_with_handle(
-                        move || call(handle_clone, move || gc_cb(), duration),
-                        duration,
-                    )
-                    .expect("leptos::prelude::set_timeout_with_handle() failed to spawn"),
-                );
+                *handle.lock() = Some(safe_set_timeout(
+                    move || call(handle_clone, move || gc_cb(), duration),
+                    duration,
+                ));
                 GcHandle::Wasm(handle)
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -145,10 +141,9 @@ impl RefetchHandle {
 
             #[cfg(any(not(test), target_arch = "wasm32"))]
             {
-                RefetchHandle::Wasm(
-                    leptos::prelude::set_timeout_with_handle(move || refetch_cb(), duration)
-                        .expect("leptos::prelude::set_timeout_with_handle() failed to spawn"),
-                )
+                use crate::utils::safe_set_timeout;
+
+                RefetchHandle::Wasm(safe_set_timeout(move || refetch_cb(), duration))
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
             {

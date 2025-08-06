@@ -14,7 +14,7 @@ use crate::{
     cache_scope::InvalidationType,
     query_scope::ScopeCacheKey,
     safe_dt_dur_add,
-    utils::{KeyHash, new_buster_id},
+    utils::{KeyHash, new_buster_id, safe_set_timeout},
 };
 
 const TIME_FORMAT: &str = "%H:%M:%S.%3f"; // %3f will give millisecond accuracy
@@ -950,11 +950,10 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
         }
 
         // Basic interval updating:
-        set_timeout_with_handle(
+        safe_set_timeout(
             move || interval_buster.set(new_buster_id()),
             std::time::Duration::from_millis(33),
         )
-        .expect("set_timeout")
     });
 
     let details_open = RwSignal::new(false);

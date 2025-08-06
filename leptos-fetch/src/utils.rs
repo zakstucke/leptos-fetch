@@ -3,6 +3,8 @@ use std::{
     sync::atomic::AtomicU64,
 };
 
+use leptos::prelude::TimeoutHandle;
+
 macro_rules! defined_id_gen {
     ($name:ident) => {
         pub(crate) fn $name() -> u64 {
@@ -101,4 +103,23 @@ where
 pub(crate) enum ResetInvalidated {
     Reset,
     NoReset,
+}
+
+#[allow(dead_code)]
+/// Works around potential panic reported in https://github.com/zakstucke/leptos-fetch/issues/43
+/// until my internal fix is upstreamed into leptos (https://github.com/leptos-rs/leptos/pull/4212)
+#[track_caller]
+pub fn safe_set_timeout(
+    cb: impl FnOnce() + 'static,
+    duration: std::time::Duration,
+) -> TimeoutHandle {
+    leptos::prelude::set_timeout_with_handle(
+        cb,
+        if duration.as_millis() > i32::MAX as _ {
+            std::time::Duration::from_millis(i32::MAX as _)
+        } else {
+            duration
+        },
+    )
+    .expect("leptos::prelude::set_timeout_with_handle() failed to spawn")
 }
