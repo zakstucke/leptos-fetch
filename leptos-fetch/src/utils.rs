@@ -105,6 +105,7 @@ pub(crate) enum ResetInvalidated {
     NoReset,
 }
 
+#[allow(dead_code)]
 /// Works around potential panic reported in https://github.com/zakstucke/leptos-fetch/issues/43
 /// until my internal fix is upstreamed into leptos (https://github.com/leptos-rs/leptos/pull/4212)
 #[track_caller]
