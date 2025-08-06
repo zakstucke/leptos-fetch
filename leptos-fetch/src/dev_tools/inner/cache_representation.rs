@@ -13,7 +13,7 @@ use crate::{
     maybe_local::MaybeLocal,
     query_scope::ScopeCacheKey,
     subs_client::QueryCreatedInfo,
-    utils::{DebugValue, KeyHash, new_buster_id},
+    utils::{DebugValue, KeyHash, new_buster_id, safe_set_timeout},
 };
 
 use super::{components::ColorOption, sort::SortConfig};
@@ -203,7 +203,7 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                             {
                                 if let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash) {
                                     if let Some(till_stale) = dyn_query.till_stale() {
-                                        let handle = leptos::prelude::set_timeout_with_handle(
+                                        let handle = safe_set_timeout(
                                             {
                                                 let is_stale_buster = is_stale_buster.clone();
                                                 move || {
@@ -211,8 +211,7 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                                                 }
                                             },
                                             till_stale,
-                                        )
-                                        .expect("leptos::prelude::set_timeout_with_handle() failed to spawn");
+                                        );
                                         is_stale_recheck_handle.set(Some(handle));
                                     } else {
                                         return true;
