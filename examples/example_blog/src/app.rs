@@ -1,7 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Duration,
+};
 
 use leptos::prelude::*;
-use leptos_fetch::{QueryClient, QueryDevtools, QueryOptions};
+use leptos_fetch::{QueryClient, QueryDevtools, QueryOptions, QueryScope};
 
 use crate::blog_list::BlogList;
 
@@ -26,8 +29,11 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
 
 #[component]
 pub fn App() -> impl IntoView {
+    let refetch_enabled = RwSignal::new(true);
     let client = QueryClient::new()
         .with_options(QueryOptions::default().with_stale_time(Duration::from_secs(10)))
+        // TODO .into() should work with the latest version of leptos after https://github.com/leptos-rs/leptos/pull/4258
+        .with_refetch_enabled_toggle(Signal::derive(move || refetch_enabled.get()))
         .provide();
 
     view! {
@@ -38,6 +44,42 @@ pub fn App() -> impl IntoView {
         </header>
         <main>
             <BlogList />
+            <RefetchExample refetch_enabled=refetch_enabled />
         </main>
+    }
+}
+
+#[component]
+pub fn RefetchExample(refetch_enabled: RwSignal<bool>) -> impl IntoView {
+    let client: QueryClient = expect_context();
+
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_resource = client.resource(
+        QueryScope::new(move |()| {
+            let call_count = call_count.clone();
+            async move { call_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+        })
+        .with_options(QueryOptions::default().with_refetch_interval(Duration::from_millis(100))),
+        move || (),
+    );
+
+    view! {
+        <div style="border: 1px solid black; padding: 10px; margin-bottom: 10px;">
+            <p>"Refetch example"</p>
+            <button on:click=move |_| {
+                refetch_enabled.update(|enabled| *enabled = !*enabled);
+            }>
+                {move || if refetch_enabled.get() { "Disable" } else { "Enable" }}
+                " Auto-refetching"
+            </button>
+            <Suspense fallback=move || {
+                view! { <p>"Loading..."</p> }
+            }>
+                <p>
+                    "Random number resource value (updates every 100ms if refetching is enabled): "
+                    <strong>{move || call_count_resource.get()}</strong>
+                </p>
+            </Suspense>
+        </div>
     }
 }

@@ -3,11 +3,12 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     future::Future,
     hash::Hash,
+    ops::{Deref, DerefMut},
     sync::{Arc, LazyLock},
 };
 
 use futures::FutureExt;
-use leptos::prelude::{ArcRwSignal, ScopedFuture, untrack};
+use leptos::prelude::{ArcRwSignal, ArcSignal, ScopedFuture, untrack};
 
 use crate::{
     QueryOptions,
@@ -143,7 +144,25 @@ pub(crate) struct ScopeLookup {
     scope_id: u64,
 }
 
-type Scopes = HashMap<ScopeCacheKey, Box<dyn ScopeTrait>>;
+#[derive(Default)]
+pub(crate) struct Scopes {
+    scopes: HashMap<ScopeCacheKey, Box<dyn ScopeTrait>>,
+    pub(crate) refetch_enabled: Option<ArcSignal<bool>>,
+}
+
+impl Deref for Scopes {
+    type Target = HashMap<ScopeCacheKey, Box<dyn ScopeTrait>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.scopes
+    }
+}
+
+impl DerefMut for Scopes {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.scopes
+    }
+}
 
 static SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
     LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
@@ -341,18 +360,20 @@ impl ScopeLookup {
         cb(maybe_query)
     }
 
-    pub fn with_cached_scope_mut<K, V, T>(
+    pub fn with_cached_scope_mut<K, V, T, P>(
         &self,
         query_scope_info: &QueryScopeInfo,
         create_scope_if_missing: bool,
-        cb: impl FnOnce(Option<&mut Scope<K, V>>) -> T,
+        mut scopes_prehook: impl FnMut(&mut Scopes) -> P,
+        cb: impl FnOnce(Option<&mut Scope<K, V>>, P) -> T,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let mut guard = self.scopes_mut();
-        let maybe_scope = match guard.entry(query_scope_info.cache_key) {
+        let mut scopes = self.scopes_mut();
+        let prehook_result = scopes_prehook(&mut scopes);
+        let maybe_scope = match scopes.entry(query_scope_info.cache_key) {
             Entry::Occupied(entry) => Some(entry.into_mut()),
             Entry::Vacant(entry) => {
                 if create_scope_if_missing {
@@ -367,14 +388,17 @@ impl ScopeLookup {
         };
 
         if let Some(scope) = maybe_scope {
-            cb(Some(
-                scope
-                    .as_any_mut()
-                    .downcast_mut::<Scope<K, V>>()
-                    .expect("Cache entry type mismatch."),
-            ))
+            cb(
+                Some(
+                    scope
+                        .as_any_mut()
+                        .downcast_mut::<Scope<K, V>>()
+                        .expect("Cache entry type mismatch."),
+                ),
+                prehook_result,
+            )
         } else {
-            cb(None)
+            cb(None, prehook_result)
         }
     }
 
@@ -411,14 +435,19 @@ impl ScopeLookup {
     {
         let (invalidate_tx, invalidate_rx) =
             futures::channel::oneshot::channel::<InvalidationType>();
-        self.with_cached_scope_mut::<K, V, _>(query_scope_info, true, |scope| {
-            let scope = scope.expect("provided a default");
-            if let Some(cached) = scope.get_mut(&key_hash) {
-                cached.set_fetch_invalidate_tx(invalidate_tx);
-            } else {
-                scope.insert_pending((*maybe_local_key).clone(), invalidate_tx, key_hash);
-            }
-        });
+        self.with_cached_scope_mut::<K, V, _, _>(
+            query_scope_info,
+            true,
+            |_| {},
+            |scope, _| {
+                let scope = scope.expect("provided a default");
+                if let Some(cached) = scope.get_mut(&key_hash) {
+                    cached.set_fetch_invalidate_tx(invalidate_tx);
+                } else {
+                    scope.insert_pending((*maybe_local_key).clone(), invalidate_tx, key_hash);
+                }
+            },
+        );
         invalidate_rx
     }
 
@@ -578,8 +607,11 @@ impl ScopeLookup {
                     None
                 };
 
-                let next_directive =
-                    self.with_cached_scope_mut::<_, _, _>(query_scope_info, true, |scope| {
+                let next_directive = self.with_cached_scope_mut::<_, _, _, _>(
+                    query_scope_info,
+                    true,
+                    |_| {},
+                    |scope, _| {
                         let scope = scope.expect("provided a default");
                         if let Some(cached) = scope.get_mut(&key_hash) {
                             cached.set_value(
@@ -628,7 +660,8 @@ impl ScopeLookup {
                                 variant: CachedOrFetchCbInputVariant::Fresh,
                             })
                         }
-                    });
+                    },
+                );
 
                 match next_directive {
                     CachedOrFetchCbOutput::Refetch => {
