@@ -35,6 +35,7 @@ codee.workspace = true
 leptos.workspace = true
 paste.workspace = true
 parking_lot.workspace = true
+pin-project-lite.workspace = true
 send_wrapper.workspace = true
 web-sys.workspace = true
 task-local.workspace = true
