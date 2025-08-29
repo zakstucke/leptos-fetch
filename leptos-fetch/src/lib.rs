@@ -17,6 +17,7 @@ mod debug_if_devtools_enabled;
 ))]
 mod events;
 mod maybe_local;
+mod no_reactive_diagnostics_future;
 mod query;
 mod query_client;
 mod query_maybe_key;
@@ -201,6 +202,7 @@ mod test {
             let ssr_ctx = Arc::new(SsrSharedContext::new());
             let owner = Owner::new_root(Some(ssr_ctx.clone()));
             owner.set();
+            provide_context(ExampleCtx);
             let client = QueryClient::new();
             (client, ssr_ctx, owner)
         }};
@@ -211,6 +213,7 @@ mod test {
             _ = Executor::init_tokio();
             let owner = Owner::new_root(Some(Arc::new(MockHydrateSharedContext::new(None).await)));
             owner.set();
+            provide_context(ExampleCtx);
             let client = QueryClient::new();
             (client, owner)
         }};
@@ -220,6 +223,7 @@ mod test {
                 MockHydrateSharedContext::new(Some(&$ssr_ctx)).await,
             )));
             owner.set();
+            provide_context(ExampleCtx);
             let client = QueryClient::new();
             (client, owner)
         }};
@@ -318,6 +322,9 @@ mod test {
         };
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct ExampleCtx;
+
     const DEFAULT_FETCHER_MS: u64 = 30;
     fn default_fetcher() -> (QueryScope<u64, u64>, Arc<AtomicUsize>) {
         let fetch_calls = Arc::new(AtomicUsize::new(0));
@@ -325,9 +332,12 @@ mod test {
             let fetch_calls = fetch_calls.clone();
             move |key: u64| {
                 let fetch_calls = fetch_calls.clone();
+                expect_context::<ExampleCtx>();
                 async move {
+                    expect_context::<ExampleCtx>();
                     tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_FETCHER_MS))
                         .await;
+                    expect_context::<ExampleCtx>();
                     fetch_calls.fetch_add(1, Ordering::Relaxed);
                     key * 2
                 }

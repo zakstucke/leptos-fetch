@@ -11,8 +11,8 @@ use codee::{Decoder, Encoder};
 use futures::pin_mut;
 use leptos::{
     prelude::{
-        ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read, ReadUntracked, Set,
-        Signal, Track, provide_context,
+        ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read, ReadUntracked,
+        ScopedFuture, Set, Signal, Track, provide_context,
     },
     server::{
         ArcLocalResource, ArcResource, FromEncodedStr, IntoEncodedString, LocalResource, Resource,
@@ -273,11 +273,13 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                 let key = key.clone();
                                                 let query_scope = query_scope.clone();
                                                 // Just adding the SendWrapper and using spawn() rather than spawn_local() to fix tests:
-                                                leptos::task::spawn(SendWrapper::new(async move {
-                                                    client
-                                                        .prefetch_query_local(query_scope, &key)
-                                                        .await;
-                                                }));
+                                                leptos::task::spawn(SendWrapper::new(
+                                                    ScopedFuture::new(async move {
+                                                        client
+                                                            .prefetch_query_local(query_scope, &key)
+                                                            .await;
+                                                    }),
+                                                ));
                                             }
                                         }
                                         CachedOrFetchCbInputVariant::Fresh => {}
@@ -521,11 +523,13 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                 {
                                                     let key = key.clone();
                                                     let query_scope = query_scope.clone();
-                                                    leptos::task::spawn(async move {
-                                                        client
-                                                            .prefetch_query(query_scope, &key)
-                                                            .await;
-                                                    });
+                                                    leptos::task::spawn(ScopedFuture::new(
+                                                        async move {
+                                                            client
+                                                                .prefetch_query(query_scope, &key)
+                                                                .await;
+                                                        },
+                                                    ));
                                                 }
 
                                                 // Handle edge case where the key function saw it was uncached, so entered here,

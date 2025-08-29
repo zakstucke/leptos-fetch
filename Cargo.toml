@@ -17,13 +17,14 @@ rust-version = "1.85"
 any_spawner = "0.3.0"
 hydration_context = "0.3"
 codee = "0.3"
-leptos = "0.8.0"
+leptos = "0.8.4"
 
 chrono = "0.4"
 chrono-humanize = "0.2"
 futures = "0.3"
 paste = "1"
 parking_lot = "0.12"
+pin-project-lite = "0.2"
 send_wrapper = "0.6"
 
 # An extraction of the tokio task local into a standalone crate

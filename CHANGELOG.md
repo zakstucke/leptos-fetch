@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+- Fix issue where the leptos context `Owner` would sometimes not be available on active resource query reloading. ([#47](https://github.com/zakstucke/leptos-fetch/pull/47))
+
 ---
 
 ## [0.4.4](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.4)

@@ -7,13 +7,14 @@ use std::{
 };
 
 use futures::FutureExt;
-use leptos::prelude::ArcRwSignal;
+use leptos::prelude::{ArcRwSignal, ScopedFuture, untrack};
 
 use crate::{
     QueryOptions,
     cache_scope::{InvalidationType, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
+    no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture,
     query::Query,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
@@ -541,8 +542,16 @@ impl ScopeLookup {
                                     key_hash,
                                     &maybe_local_key,
                                 );
+
+                                // Want to explictly remove the observer so there's no "leak through" reactivity in some contexts but not others and therefore strange behaviour.
+                                let fut = untrack(|| {
+                                    ScopedFuture::new_untracked(NoReactiveDiagnosticsFuture::new(
+                                        fetcher(key.clone()),
+                                    ))
+                                });
+
                                 futures::select! {
-                                    new_value = fetcher(key.clone()).fuse() => {
+                                    new_value = fut.fuse() => {
                                         break new_value;
                                     },
                                     _ = invalidate_rx.fuse() => {}
