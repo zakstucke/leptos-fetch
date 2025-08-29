@@ -816,12 +816,15 @@ mod test {
             .await;
     }
 
-    /// Make sure refetching works at the expected time, and only does so once there are active resources using it.
+    /// Make sure refetching works at the expected time,
+    /// only does so once there are active resources using it,
+    /// and skips when refetching is disabled.
     #[rstest]
     #[tokio::test]
     async fn test_refetch(
         #[values(ResourceType::Local, ResourceType::Blocking, ResourceType::Normal)] resource_type: ResourceType,
         #[values(false, true)] arc: bool,
+        #[values(false, true)] set_refetch_enabled: bool,
     ) {
         identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
@@ -844,7 +847,11 @@ mod test {
                     fetcher
                 ).with_options(QueryOptions::new().with_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)));
 
-                let (client, _guard, owner) = prep_vari!(false);
+                let (mut client, _guard, owner) = prep_vari!(false);
+                let refetch_enabled = ArcRwSignal::new(true);
+                if set_refetch_enabled {
+                    client = client.with_refetch_enabled_toggle(refetch_enabled.clone());
+                }
 
                 macro_rules! with_tmp_owner {
                     ($body:block) => {{
@@ -896,7 +903,20 @@ mod test {
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 3);
 
-                                // Run again to make sure:
+                                if set_refetch_enabled {
+                                    // Disable refetching, should skip this:
+                                    refetch_enabled.set(false);
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                                    tick!();
+
+                                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 3);
+                                    assert_eq!($get_resource().await, 4);
+                                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 3);
+
+                                    // Should start refetching again once re-enabled:
+                                    refetch_enabled.set(true);
+                                }
+
                                 tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
                                 tick!();
 

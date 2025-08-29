@@ -71,22 +71,21 @@ impl GcHandle {
                     handle: Arc<Mutex<Option<TimeoutHandle>>>,
                     gc_cb: impl Fn() -> bool + 'static,
                     duration: Duration,
-                ) {
-                    let gced = gc_cb();
-                    if !gced {
-                        let handle_clone = handle.clone();
-                        *handle.lock() = Some(safe_set_timeout(
-                            move || call(handle_clone, gc_cb, duration),
-                            duration,
-                        ));
-                    }
+                ) -> TimeoutHandle {
+                    safe_set_timeout(
+                        move || {
+                            let gced = gc_cb();
+                            if !gced {
+                                let handle_clone = handle.clone();
+                                *handle.lock() = Some(call(handle_clone, gc_cb, duration));
+                            }
+                        },
+                        duration,
+                    )
                 }
 
                 let handle_clone = handle.clone();
-                *handle.lock() = Some(safe_set_timeout(
-                    move || call(handle_clone, move || gc_cb(), duration),
-                    duration,
-                ));
+                *handle.lock() = Some(call(handle_clone, move || gc_cb(), duration));
                 GcHandle::Wasm(handle)
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -121,11 +120,16 @@ impl GcHandle {
     }
 }
 
+pub(crate) enum RefetchCbResult {
+    Ok,
+    PostponedWhilstRefetchDisabled,
+}
+
 #[derive(Debug)]
 pub(crate) enum RefetchHandle {
     None,
     #[allow(dead_code)]
-    Wasm(TimeoutHandle),
+    Wasm(Arc<Mutex<Option<TimeoutHandle>>>),
     #[cfg(all(test, not(target_arch = "wasm32")))]
     #[allow(dead_code)]
     Tokio(tokio::task::JoinHandle<()>),
@@ -133,7 +137,7 @@ pub(crate) enum RefetchHandle {
 
 impl RefetchHandle {
     pub fn new(
-        refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn()>>>>,
+        refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>>,
         duration: Option<Duration>,
     ) -> Self {
         if let Some(refetch_cb) = refetch_cb {
@@ -143,15 +147,39 @@ impl RefetchHandle {
             {
                 use crate::utils::safe_set_timeout;
 
-                RefetchHandle::Wasm(safe_set_timeout(move || refetch_cb(), duration))
+                let handle = Arc::new(Mutex::new(None));
+                fn call(
+                    handle: Arc<Mutex<Option<TimeoutHandle>>>,
+                    refetch_cb: Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>,
+                    duration: Duration,
+                ) -> TimeoutHandle {
+                    safe_set_timeout(
+                        move || match refetch_cb() {
+                            RefetchCbResult::Ok => {}
+                            RefetchCbResult::PostponedWhilstRefetchDisabled => {
+                                let handle_clone = handle.clone();
+                                *handle.lock() = Some(call(handle_clone, refetch_cb, duration));
+                            }
+                        },
+                        duration,
+                    )
+                }
+                let handle_clone = handle.clone();
+                *handle.lock() = Some(call(handle_clone, refetch_cb, duration));
+                RefetchHandle::Wasm(handle)
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
             {
                 // Just for testing, tokio tests are single threaded so SendWrapper is fine:
                 // (because not sure why but spawn_local hangs.)
                 let handle = tokio::task::spawn(SendWrapper::new(async move {
-                    tokio::time::sleep(duration).await;
-                    refetch_cb();
+                    loop {
+                        tokio::time::sleep(duration).await;
+                        match refetch_cb() {
+                            RefetchCbResult::Ok => break,
+                            RefetchCbResult::PostponedWhilstRefetchDisabled => {}
+                        }
+                    }
                 }));
                 RefetchHandle::Tokio(handle)
             }
@@ -163,7 +191,11 @@ impl RefetchHandle {
     fn cancel(&mut self) {
         match self {
             RefetchHandle::None => {}
-            RefetchHandle::Wasm(handle) => handle.clear(),
+            RefetchHandle::Wasm(handle) => {
+                if let Some(handle) = handle.lock().take() {
+                    handle.clear();
+                }
+            }
             #[cfg(all(test, not(target_arch = "wasm32")))]
             RefetchHandle::Tokio(handle) => handle.abort(),
         }

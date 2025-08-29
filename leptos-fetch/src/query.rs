@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use leptos::prelude::{ArcRwSignal, Set};
+use leptos::prelude::{ArcRwSignal, GetUntracked, Set};
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
@@ -19,7 +19,7 @@ use crate::{
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     safe_dt_dur_add,
     utils::{KeyHash, ResetInvalidated, new_buster_id},
-    value_with_callbacks::{GcHandle, GcValue, RefetchHandle},
+    value_with_callbacks::{GcHandle, GcValue, RefetchCbResult, RefetchHandle},
 };
 
 pub(crate) struct Query<K, V: 'static> {
@@ -32,7 +32,7 @@ pub(crate) struct Query<K, V: 'static> {
     /// Will always be None on the server, hence the SendWrapper is fine:
     gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>,
     /// Will always be None on the server, hence the SendWrapper is fine:
-    refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn()>>>>,
+    refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>>,
     active_resources: Arc<Mutex<HashSet<u64>>>,
     pub buster: ArcRwSignal<u64>,
     scope_lookup: ScopeLookup,
@@ -222,28 +222,41 @@ impl<K, V> Query<K, V> {
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
             let query_scope_info = query_scope_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
-                scope_lookup.with_cached_scope_mut::<K, V, _>(
+                scope_lookup.with_cached_scope_mut::<K, V, _, _>(
                     &query_scope_info,
                     false,
-                    |maybe_scope| {
-                        // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
-                        if let Some(scope) = maybe_scope {
-                            if let Some(cached) = scope.get_mut(&key_hash) {
-                                cached.invalidate(InvalidationType::Invalidate);
-                                #[cfg(any(
-                                    all(debug_assertions, feature = "devtools"),
-                                    feature = "devtools-always"
-                                ))]
-                                {
-                                    cached.events.push(crate::events::Event::new(
+                    |scopes| {
+                        scopes
+                            .refetch_enabled
+                            .as_ref()
+                            .map(|re| re.get_untracked())
+                            .unwrap_or(true)
+                    },
+                    |maybe_scope, refetch_enabled| {
+                        if refetch_enabled {
+                            // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
+                            if let Some(scope) = maybe_scope {
+                                if let Some(cached) = scope.get_mut(&key_hash) {
+                                    cached.invalidate(InvalidationType::Invalidate);
+                                    #[cfg(any(
+                                        all(debug_assertions, feature = "devtools"),
+                                        feature = "devtools-always"
+                                    ))]
+                                    {
+                                        cached.events.push(crate::events::Event::new(
                                     crate::events::EventVariant::RefetchTriggeredViaInvalidation,
                                 ));
+                                    }
                                 }
                             }
+                            RefetchCbResult::Ok
+                        } else {
+                            RefetchCbResult::PostponedWhilstRefetchDisabled
                         }
                     },
-                );
-            }) as Box<dyn Fn()>)))
+                )
+            })
+                as Box<dyn Fn() -> RefetchCbResult>)))
         } else {
             None
         };

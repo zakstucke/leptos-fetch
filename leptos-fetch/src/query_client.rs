@@ -188,6 +188,22 @@ impl<Codec: 'static> QueryClient<Codec> {
         self.options
     }
 
+    /// Provide a signal to globally enable/disable auto refetching of queries
+    /// that have active resources and have set [`QueryOptions::with_refetch_interval`].
+    ///
+    /// Whilst this signal returns `false`, refetches will be skipped.
+    #[track_caller]
+    pub fn with_refetch_enabled_toggle(self, refetch_enabled: impl Into<ArcSignal<bool>>) -> Self {
+        self.scope_lookup.scopes_mut().refetch_enabled = Some(refetch_enabled.into());
+        self
+    }
+
+    /// If set, access the signal that globally enables/disables auto refetching of queries.
+    #[track_caller]
+    pub fn refetch_enabled(&self) -> Option<ArcSignal<bool>> {
+        self.scope_lookup.scopes().refetch_enabled.clone()
+    }
+
     /// Query with [`LocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
     ///
     /// If a cached value exists but is stale, the cached value will be initially used, then refreshed in the background, updating once the new value is ready.
@@ -581,10 +597,11 @@ impl<Codec: 'static> QueryClient<Codec> {
                 }
                 if let Some(val) = resource.read().as_ref() {
                     if MaybeKey::mapped_value_is_some(val) {
-                        scope_lookup.with_cached_scope_mut::<K, V, _>(
+                        scope_lookup.with_cached_scope_mut::<K, V, _, _>(
                             &query_scope_info,
                             true,
-                            |maybe_scope| {
+                            |_| {},
+                            |maybe_scope, _| {
                                 let scope = maybe_scope.expect("provided a default");
                                 if let Some(key) = keyer().into_maybe_key() {
                                     let key_hash = KeyHash::new(&key);
@@ -933,10 +950,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let key_hash = KeyHash::new(key.borrow());
-        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &query_scope_info,
             true,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 let scope = maybe_scope.expect("provided a default");
 
                 // Make sure to look both caches if threadsafe, and prefer threadsafe:
@@ -1031,10 +1049,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         let key_hash = KeyHash::new(key);
         let mut modifier_holder = Some(modifier);
 
-        let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             query_scope_info,
             false,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     if let Some(cached) = scope.get_mut(&key_hash) {
                         let modifier = modifier_holder
@@ -1717,10 +1736,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &QueryScopeInfo::new_local(&query_scope),
             false,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     for query in scope.all_queries_mut_include_pending() {
                         if let Some(key) = query.key().value_if_safe() {
@@ -1755,8 +1775,11 @@ impl<Codec: 'static> QueryClient<Codec> {
             return vec![];
         }
 
-        self.scope_lookup
-            .with_cached_scope_mut::<K, V, _>(query_scope_info, false, |maybe_scope| {
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            query_scope_info,
+            false,
+            |_| {},
+            |maybe_scope, _| {
                 let mut invalidated = vec![];
                 if let Some(scope) = maybe_scope {
                     for (key, key_hash) in keys.into_iter().zip(key_hashes.iter()) {
@@ -1767,7 +1790,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                     }
                 }
                 invalidated
-            })
+            },
+        )
     }
 
     /// Mark all queries of a specific type as stale.
@@ -1841,10 +1865,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &QueryScopeInfo::new_local(&query_scope),
             false,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     let key_hash = KeyHash::new(key.borrow());
                     if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
@@ -1879,10 +1904,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &QueryScopeInfo::new_local(&query_scope),
             false,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     scope
                         .get(&KeyHash::new(key.borrow()))
@@ -1905,10 +1931,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _>(
+        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &QueryScopeInfo::new_local(&query_scope),
             false,
-            |maybe_scope| {
+            |_| {},
+            |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     if let Some(query) = scope.get_mut(&KeyHash::new(key.borrow())) {
                         query.mark_valid();

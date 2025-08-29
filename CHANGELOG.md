@@ -4,9 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-- Fix issue where the leptos context `Owner` would sometimes not be available on active resource query reloading. ([#47](https://github.com/zakstucke/leptos-fetch/pull/47))
-
 ---
+
+## [0.4.5](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.5)
+
+### Added
+- New [`QueryClient::with_refetch_enabled_toggle`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.with_refetch_enabled_toggle) & [`QueryClient::refetch_enabled`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.refetch_enabled) to toggle refetching on and off via a signal globally. ([#46](https://github.com/zakstucke/leptos-fetch/pull/46))
+
+### Fixed
+- Fix issue where the leptos context `Owner` would sometimes not be available on active resource query reloading. ([#47](https://github.com/zakstucke/leptos-fetch/pull/47))
 
 ## [0.4.4](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.4)
 
