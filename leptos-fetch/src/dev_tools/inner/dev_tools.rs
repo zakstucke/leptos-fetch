@@ -11,7 +11,7 @@ use super::{
 
 use crate::{
     QueryClient,
-    cache_scope::InvalidationType,
+    cache_scope::QueryAbortReason,
     query_scope::ScopeCacheKey,
     safe_dt_dur_add,
     utils::{KeyHash, new_buster_id, safe_set_timeout},
@@ -977,7 +977,7 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                         scope
                                             .invalidate_queries(
                                                 vec![key_hash],
-                                                InvalidationType::Invalidate,
+                                                QueryAbortReason::Invalidate,
                                             );
                                     }
                                 }

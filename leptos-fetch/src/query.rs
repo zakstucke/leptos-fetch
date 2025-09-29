@@ -12,7 +12,7 @@ use send_wrapper::SendWrapper;
 use crate::{
     QueryOptions, SYNC_TRACK_UPDATE_MARKER,
     cache::ScopeLookup,
-    cache_scope::InvalidationType,
+    cache_scope::QueryAbortReason,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
@@ -43,7 +43,7 @@ pub(crate) struct Query<K, V: 'static> {
         feature = "devtools-always"
     ))]
     pub events: crate::events::Events,
-    pub fetch_invalidate_tx: Option<futures::channel::oneshot::Sender<InvalidationType>>,
+    pub query_abort_tx: Option<futures::channel::oneshot::Sender<QueryAbortReason>>,
 }
 
 impl<K, V> Drop for Query<K, V> {
@@ -237,7 +237,7 @@ impl<K, V> Query<K, V> {
                             // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
                             if let Some(scope) = maybe_scope {
                                 if let Some(cached) = scope.get_mut(&key_hash) {
-                                    cached.invalidate(InvalidationType::Invalidate);
+                                    cached.invalidate(QueryAbortReason::Invalidate);
                                     #[cfg(any(
                                         all(debug_assertions, feature = "devtools"),
                                         feature = "devtools-always"
@@ -285,7 +285,7 @@ impl<K, V> Query<K, V> {
             scope_lookup,
             cache_key,
             key_hash,
-            fetch_invalidate_tx: None,
+            query_abort_tx: None,
         }
     }
 
@@ -335,7 +335,7 @@ impl<K, V> Query<K, V> {
         let _ = total_active;
     }
 
-    pub fn invalidate(&mut self, invalidation_type: InvalidationType) {
+    pub fn invalidate(&mut self, invalidation_type: QueryAbortReason) {
         if !self.invalidated {
             self.invalidated = true;
             // To re-trigger all active resources automatically on manual invalidation:
@@ -380,7 +380,7 @@ impl<K, V> Query<K, V> {
             }
         }
         // Invalidate any in-flight fetch if there is one:
-        if let Some(invalidate_tx) = self.fetch_invalidate_tx.take() {
+        if let Some(invalidate_tx) = self.query_abort_tx.take() {
             let _ = invalidate_tx.send(invalidation_type);
         }
     }
@@ -489,10 +489,10 @@ impl<K, V> Query<K, V> {
         result
     }
 
-    pub fn set_fetch_invalidate_tx(
+    pub fn set_query_abort_tx(
         &mut self,
-        invalidate_tx: futures::channel::oneshot::Sender<InvalidationType>,
+        invalidate_tx: futures::channel::oneshot::Sender<QueryAbortReason>,
     ) {
-        self.fetch_invalidate_tx = Some(invalidate_tx);
+        self.query_abort_tx = Some(invalidate_tx);
     }
 }

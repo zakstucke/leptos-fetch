@@ -10,15 +10,20 @@ use crate::{
 pub(crate) enum QueryOrPending<K, V: 'static> {
     Query(Query<K, V>),
     Pending {
-        invalidate_tx: Option<futures::channel::oneshot::Sender<InvalidationType>>,
+        query_abort_tx: Option<futures::channel::oneshot::Sender<QueryAbortReason>>,
         key: MaybeLocal<K>,
     },
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum InvalidationType {
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum QueryAbortReason {
     Clear,
     Invalidate,
+    // Scenario: LocalResource, prefetch/fetch_query etc, starts running on client,
+    // same query used in a resource on server, that streams over and is the actual value to be used.
+    // need to invalidate pending query that had been triggered by the local query running,
+    // before realising there was a value being streamed from the server.
+    SsrStreamedValueOverride,
 }
 
 impl<K, V> QueryOrPending<K, V> {
@@ -46,12 +51,12 @@ impl<K, V> QueryOrPending<K, V> {
         }
     }
 
-    pub fn invalidate(&mut self, invalidation_type: InvalidationType) {
+    pub fn invalidate(&mut self, invalidation_type: QueryAbortReason) {
         match self {
-            QueryOrPending::Pending { invalidate_tx, .. } => {
+            QueryOrPending::Pending { query_abort_tx, .. } => {
                 // Invalidate any in-flight fetch if there is still one:
-                if let Some(invalidate_tx) = invalidate_tx.take() {
-                    let _ = invalidate_tx.send(invalidation_type);
+                if let Some(query_abort_tx) = query_abort_tx.take() {
+                    let _ = query_abort_tx.send(invalidation_type);
                 }
             }
             QueryOrPending::Query(query) => query.invalidate(invalidation_type),
@@ -162,12 +167,12 @@ where
     pub fn insert_pending(
         &mut self,
         key: MaybeLocal<K>,
-        invalidate_tx: futures::channel::oneshot::Sender<InvalidationType>,
+        query_abort_tx: futures::channel::oneshot::Sender<QueryAbortReason>,
         key_hash: KeyHash,
     ) {
         let is_local = key.is_local();
         let pending = QueryOrPending::Pending {
-            invalidate_tx: Some(invalidate_tx),
+            query_abort_tx: Some(query_abort_tx),
             key,
         };
         if is_local {
