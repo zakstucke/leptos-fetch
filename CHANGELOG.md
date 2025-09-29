@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Fix race condition between streamed resource queries and local queries [#48](https://github.com/zakstucke/leptos-fetch/issues/48). ([#49](https://github.com/zakstucke/leptos-fetch/pull/49))
+
 ---
 
 ## [0.4.5](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.5)

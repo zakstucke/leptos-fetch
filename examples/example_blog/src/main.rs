@@ -1,3 +1,5 @@
+pub mod utils;
+
 #[cfg(feature = "ssr")]
 use axum::Router;
 
@@ -6,6 +8,12 @@ use axum::Router;
 async fn main() {
     use example_blog::app::{shell, App};
     use leptos_axum::{generate_route_list, LeptosRoutes};
+
+    // Setup tracing:
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .without_time()
+        .init();
 
     // Setting this to None means we'll be using cargo-leptos and its env vars
     let conf = leptos::prelude::get_configuration(None).unwrap();
@@ -17,7 +25,10 @@ async fn main() {
     let app = Router::new()
         .leptos_routes(&leptos_options, routes, {
             let leptos_options = leptos_options.clone();
-            move || shell(leptos_options.clone())
+            move || {
+                tracing::info!("Handling request");
+                shell(leptos_options.clone())
+            }
         })
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
@@ -25,7 +36,7 @@ async fn main() {
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    println!("listening on http://{}", &addr);
+    tracing::info!("listening on http://{}", &addr);
     axum::serve(listener, app.into_make_service())
         .await
         .unwrap();

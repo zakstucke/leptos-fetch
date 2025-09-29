@@ -2,11 +2,13 @@
 
 use std::{
     borrow::Borrow,
+    collections::HashMap,
     fmt::Debug,
     hash::Hash,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, LazyLock, atomic::AtomicBool},
 };
 
+use chrono::{DateTime, Utc};
 use codee::{Decoder, Encoder};
 use futures::pin_mut;
 use leptos::{
@@ -23,7 +25,7 @@ use send_wrapper::SendWrapper;
 use crate::{
     ArcLocalSignal, QueryOptions,
     cache::{CachedOrFetchCbInputVariant, CachedOrFetchCbOutput},
-    cache_scope::InvalidationType,
+    cache_scope::{QueryAbortReason, QueryOrPending},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
@@ -74,6 +76,7 @@ std::thread_local! {
 pub struct QueryClient<Codec = DefaultCodec> {
     pub(crate) scope_lookup: ScopeLookup,
     options: QueryOptions,
+    created_at: DateTime<Utc>,
     _ser: std::marker::PhantomData<SendWrapper<Codec>>,
 }
 
@@ -112,6 +115,7 @@ impl QueryClient<DefaultCodec> {
         Self {
             scope_lookup: ScopeLookup::new(),
             options: QueryOptions::default(),
+            created_at: Utc::now(),
             _ser: std::marker::PhantomData,
         }
     }
@@ -167,6 +171,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         QueryClient {
             scope_lookup: self.scope_lookup,
             options: self.options,
+            created_at: self.created_at,
             _ser: std::marker::PhantomData,
         }
     }
@@ -590,6 +595,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         let effect = {
             let resource = resource.clone();
             let buster_if_uncached = buster_if_uncached.clone();
+            let client_created_at = self.created_at;
             // Converting to Arc because the tests like the client get dropped even though this persists:
             move |complete: Option<Option<()>>| {
                 if let Some(Some(())) = complete {
@@ -605,8 +611,45 @@ impl<Codec: 'static> QueryClient<Codec> {
                                 let scope = maybe_scope.expect("provided a default");
                                 if let Some(key) = keyer().into_maybe_key() {
                                     let key_hash = KeyHash::new(&key);
+
+                                    // Had a bug in tests where:
+                                    // calling client.resource() multiple times
+                                    // previous impl would only run the effect once per client.resource(), 
+                                    // but would still run again on subsequent client.resource() with the same key value
+                                    // - client.resource()
+                                    // - invalidate, starts loading in background
+                                    // - client.resource()
+                                    // - effect runs again, sees resource has value, goes to set it, fires QueryAbortReason::SsrStreamedValueOverride which cancels the actual new query which is loading to replace the invalidated one
+                                    // So have to have a client wide protector, to make sure the effect really only runs once on the client, even if resource() called multiple times.
+                                    if (cfg!(test) || cfg!(not(feature = "ssr"))) && 
+                                        // Preventing memory leak, issue is only for first render:
+                                        (Utc::now() - client_created_at).num_seconds() < 10
+                                    {
+                                        use parking_lot::Mutex;
+
+                                        static ALREADY_SEEN: LazyLock<Mutex<HashMap<(u64, ScopeCacheKey, KeyHash), ()>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+                                        let key = (scope_lookup.scope_id, query_scope_info.cache_key, key_hash);
+                                        let mut guard = ALREADY_SEEN.lock();
+                                        if guard.contains_key(&key) {
+                                            return;
+                                        }
+                                        guard.insert(key, ());
+                                    }
+
                                     let invalidation_prefix = query_scope.invalidation_prefix(&key);
-                                    if !scope.contains_key(&key_hash) {
+
+                                    let mut was_pending = false;
+                                    // Protect against race condition: cancel any frontend query that started already if there was a client side 
+                                    // local resource or prefetch/fetch_query etc that started on the initial client-side ticks:
+                                    if let Some(QueryOrPending::Pending { query_abort_tx, .. }) = scope.get_mut_include_pending(&key_hash) {
+                                        if let Some(tx) = query_abort_tx.take() {
+                                            tx.send(QueryAbortReason::SsrStreamedValueOverride).unwrap();
+                                            was_pending = true;
+                                        }
+                                    }
+
+                                    if was_pending || !scope.contains_key(&key_hash) {
                                         let query = Query::new(
                                             client_options,
                                             scope_lookup,
@@ -630,7 +673,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     }
                                     scope
                                         .get(&key_hash)
-                                        .unwrap()
+                                        .expect("Just inserted")
                                         .mark_resource_active(resource_id)
                                 }
                             },
@@ -1193,7 +1236,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 let track = Arc::new(AtomicBool::new(true));
 
                 // Will monitor for invalidations during the user async fn, which could take a long time:
-                let invalidate_rx = self.scope_lookup.prepare_invalidation_channel::<K, V>(
+                let query_abort_rx = self.scope_lookup.prepare_invalidation_channel::<K, V>(
                     &query_scope_info,
                     key_hash,
                     &lazy_maybe_local_key(),
@@ -1206,14 +1249,16 @@ impl<Codec: 'static> QueryClient<Codec> {
                 // Specifically, we care about if .clear() is called.
                 // If so, we shouldn't set the value, as it will have been generated with the cleared cached query value.
                 // If invalidated should still set, because the value will be deemed "less stale", but won't de-invalidate it.
+                // Don't care about QueryAbortReason::SsrStreamedValueOverride
+                // as it shouldn't be possible to get to this point before all ssr streaming is done.
                 let mut cleared_during_user_fn = false;
                 let result = {
                     pin_mut!(result_fut);
-                    pin_mut!(invalidate_rx);
-                    match futures::future::select(result_fut, invalidate_rx).await {
-                        futures::future::Either::Left((result, _invalidate_rx)) => result,
-                        futures::future::Either::Right((invalidation_type, result_fut)) => {
-                            if let Ok(InvalidationType::Clear) = invalidation_type {
+                    pin_mut!(query_abort_rx);
+                    match futures::future::select(result_fut, query_abort_rx).await {
+                        futures::future::Either::Left((result, _query_abort_rx)) => result,
+                        futures::future::Either::Right((query_abort_reason, result_fut)) => {
+                            if let Ok(QueryAbortReason::Clear) = query_abort_reason {
                                 // If the query was cleared, don't set the new value.
                                 cleared_during_user_fn = true;
                             }
@@ -1745,7 +1790,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                     for query in scope.all_queries_mut_include_pending() {
                         if let Some(key) = query.key().value_if_safe() {
                             if should_invalidate(key) {
-                                query.invalidate(InvalidationType::Invalidate);
+                                query.invalidate(QueryAbortReason::Invalidate);
                             }
                         }
                     }
@@ -1784,7 +1829,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     for (key, key_hash) in keys.into_iter().zip(key_hashes.iter()) {
                         if let Some(cached) = scope.get_mut_include_pending(key_hash) {
-                            cached.invalidate(InvalidationType::Invalidate);
+                            cached.invalidate(QueryAbortReason::Invalidate);
                             invalidated.push(key);
                         }
                     }
@@ -1809,7 +1854,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     pub(crate) fn invalidate_query_scope_inner(&self, scope_cache_key: &ScopeCacheKey) {
         let mut guard = self.scope_lookup.scopes_mut();
         if let Some(scope) = guard.get_mut(scope_cache_key) {
-            scope.invalidate_scope(InvalidationType::Invalidate);
+            scope.invalidate_scope(QueryAbortReason::Invalidate);
             for buster in scope.busters() {
                 buster.try_set(new_buster_id());
             }
@@ -1826,7 +1871,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     pub fn invalidate_all_queries(&self) {
         for scope in self.scope_lookup.scopes_mut().values_mut() {
             let busters = scope.busters();
-            scope.invalidate_scope(InvalidationType::Invalidate);
+            scope.invalidate_scope(QueryAbortReason::Invalidate);
             for buster in busters {
                 buster.try_set(new_buster_id());
             }
@@ -1845,7 +1890,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     pub fn clear(&self) {
         for scope in self.scope_lookup.scopes_mut().values_mut() {
             let busters = scope.busters();
-            scope.invalidate_scope(InvalidationType::Clear);
+            scope.invalidate_scope(QueryAbortReason::Clear);
             scope.clear();
             for buster in busters {
                 buster.try_set(new_buster_id());
@@ -1873,7 +1918,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     let key_hash = KeyHash::new(key.borrow());
                     if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
-                        cached.invalidate(InvalidationType::Clear);
+                        cached.invalidate(QueryAbortReason::Clear);
                     }
                     let removed = scope.remove_entry(&key_hash);
                     // Calling it again just in case because in tests might be in sync cache and non sync cache:

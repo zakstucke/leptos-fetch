@@ -12,7 +12,7 @@ use leptos::prelude::{ArcRwSignal, ArcSignal, ScopedFuture, untrack};
 
 use crate::{
     QueryOptions,
-    cache_scope::{InvalidationType, Scope},
+    cache_scope::{QueryAbortReason, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture,
@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub(crate) trait Busters: 'static {
-    fn invalidate_scope(&mut self, invalidation_type: InvalidationType);
+    fn invalidate_scope(&mut self, invalidation_type: QueryAbortReason);
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
@@ -34,7 +34,7 @@ where
     K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
-    fn invalidate_scope(&mut self, invalidation_type: InvalidationType) {
+    fn invalidate_scope(&mut self, invalidation_type: QueryAbortReason) {
         for query in self.all_queries_mut_include_pending() {
             query.invalidate(invalidation_type);
         }
@@ -61,7 +61,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         feature = "devtools-always"
     ))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery>;
-    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>, invalidation_type: InvalidationType);
+    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>, invalidation_type: QueryAbortReason);
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -110,7 +110,7 @@ where
     fn invalidate_queries(
         &mut self,
         key_hashes: Vec<KeyHash>,
-        invalidation_type: InvalidationType,
+        invalidation_type: QueryAbortReason,
     ) {
         for key_hash in key_hashes {
             if let Some(query) = self.get_mut(&key_hash) {
@@ -141,7 +141,7 @@ pub(crate) struct ScopeLookup {
     // Shouldn't be an issue as there should be only 1 ScopeLookup per QueryClient,
     // and only one QueryClient, or at most a few per app.
     // Using this rather than e.g. a leptos StoredValue, just to have no chance of external disposed errors.
-    scope_id: u64,
+    pub scope_id: u64,
 }
 
 #[derive(Default)]
@@ -428,13 +428,13 @@ impl ScopeLookup {
         query_scope_info: &QueryScopeInfo,
         key_hash: KeyHash,
         maybe_local_key: &MaybeLocal<K>,
-    ) -> futures::channel::oneshot::Receiver<InvalidationType>
+    ) -> futures::channel::oneshot::Receiver<QueryAbortReason>
     where
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let (invalidate_tx, invalidate_rx) =
-            futures::channel::oneshot::channel::<InvalidationType>();
+        let (query_abort_tx, query_abort_rx) =
+            futures::channel::oneshot::channel::<QueryAbortReason>();
         self.with_cached_scope_mut::<K, V, _, _>(
             query_scope_info,
             true,
@@ -442,13 +442,13 @@ impl ScopeLookup {
             |scope, _| {
                 let scope = scope.expect("provided a default");
                 if let Some(cached) = scope.get_mut(&key_hash) {
-                    cached.set_fetch_invalidate_tx(invalidate_tx);
+                    cached.set_query_abort_tx(query_abort_tx);
                 } else {
-                    scope.insert_pending((*maybe_local_key).clone(), invalidate_tx, key_hash);
+                    scope.insert_pending((*maybe_local_key).clone(), query_abort_tx, key_hash);
                 }
             },
         );
-        invalidate_rx
+        query_abort_rx
     }
 
     pub async fn cached_or_fetch<K, V, T>(
@@ -558,7 +558,12 @@ impl ScopeLookup {
 
                 let maybe_local_key = lazy_maybe_local_key();
 
-                let new_value = self
+                enum MaybeNewValue<V> {
+                    NewValue(V),
+                    SsrStreamedValueOverride,
+                }
+
+                let maybe_new_value = self
                     .with_notify_fetching(
                         query_scope_info.cache_key,
                         key_hash,
@@ -566,11 +571,12 @@ impl ScopeLookup {
                         // Call the fetcher, but reset and repeat if an invalidation occurs whilst in-flight:
                         async {
                             loop {
-                                let invalidate_rx = self.prepare_invalidation_channel::<K, V>(
-                                    query_scope_info,
-                                    key_hash,
-                                    &maybe_local_key,
-                                );
+                                let query_abort_rx = self
+                                    .prepare_invalidation_channel::<K, V>(
+                                        query_scope_info,
+                                        key_hash,
+                                        &maybe_local_key,
+                                    );
 
                                 // Want to explictly remove the observer so there's no "leak through" reactivity in some contexts but not others and therefore strange behaviour.
                                 let fut = untrack(|| {
@@ -579,11 +585,20 @@ impl ScopeLookup {
                                     ))
                                 });
 
-                                futures::select! {
-                                    new_value = fut.fuse() => {
-                                        break new_value;
+                                futures::select_biased! {
+                                    rx_result = query_abort_rx.fuse() => {
+                                        if let Ok(reason) = rx_result {
+                                            match reason {
+                                                QueryAbortReason::Invalidate | QueryAbortReason::Clear => {},
+                                                QueryAbortReason::SsrStreamedValueOverride => {
+                                                    break MaybeNewValue::SsrStreamedValueOverride;
+                                                },
+                                            }
+                                        }
                                     },
-                                    _ = invalidate_rx.fuse() => {}
+                                    new_value = fut.fuse() => {
+                                        break MaybeNewValue::NewValue(new_value);
+                                    },
                                 }
                             }
                         },
@@ -613,52 +628,65 @@ impl ScopeLookup {
                     |_| {},
                     |scope, _| {
                         let scope = scope.expect("provided a default");
-                        if let Some(cached) = scope.get_mut(&key_hash) {
-                            cached.set_value(
-                                new_value,
-                                true,
-                                #[cfg(any(
-                                    all(debug_assertions, feature = "devtools"),
-                                    feature = "devtools-always"
-                                ))]
-                                crate::events::Event::new(crate::events::EventVariant::Fetched {
-                                    elapsed_ms,
-                                }),
-                                ResetInvalidated::Reset,
-                            );
-                            return_cb(CachedOrFetchCbInput {
-                                cached,
-                                variant: CachedOrFetchCbInputVariant::CachedUpdated,
-                            })
-                        } else {
-                            // We already notified before the async fetch, so it would show up sooner.
-                            scope.insert_without_query_created_notif(
-                                key_hash,
-                                Query::new(
-                                    client_options,
-                                    *self,
-                                    query_scope_info,
-                                    invalidation_prefix,
-                                    key_hash,
-                                    maybe_local_key,
-                                    new_value,
-                                    buster_if_uncached
-                                        .expect("loading_first_time means this is Some(). (bug)"),
-                                    scope_options,
-                                    None,
-                                    #[cfg(any(
-                                        all(debug_assertions, feature = "devtools"),
-                                        feature = "devtools-always"
-                                    ))]
-                                    crate::events::Event::new(
-                                        crate::events::EventVariant::Fetched { elapsed_ms },
-                                    ),
-                                ),
-                            );
-                            return_cb(CachedOrFetchCbInput {
-                                cached: scope.get(&key_hash).expect("Just set. (bug)"),
-                                variant: CachedOrFetchCbInputVariant::Fresh,
-                            })
+                        match maybe_new_value {
+                            MaybeNewValue::NewValue(new_value) => {
+                                if let Some(cached) = scope.get_mut(&key_hash) {
+                                    cached.set_value(
+                                        new_value,
+                                        true,
+                                        #[cfg(any(
+                                            all(debug_assertions, feature = "devtools"),
+                                            feature = "devtools-always"
+                                        ))]
+                                        crate::events::Event::new(
+                                            crate::events::EventVariant::Fetched { elapsed_ms },
+                                        ),
+                                        ResetInvalidated::Reset,
+                                    );
+                                    return_cb(CachedOrFetchCbInput {
+                                        cached,
+                                        variant: CachedOrFetchCbInputVariant::CachedUpdated,
+                                    })
+                                } else {
+                                    // We already notified before the async fetch, so it would show up sooner.
+                                    scope.insert_without_query_created_notif(
+                                        key_hash,
+                                        Query::new(
+                                            client_options,
+                                            *self,
+                                            query_scope_info,
+                                            invalidation_prefix,
+                                            key_hash,
+                                            maybe_local_key,
+                                            new_value,
+                                            buster_if_uncached.expect(
+                                                "loading_first_time means this is Some(). (bug)",
+                                            ),
+                                            scope_options,
+                                            None,
+                                            #[cfg(any(
+                                                all(debug_assertions, feature = "devtools"),
+                                                feature = "devtools-always"
+                                            ))]
+                                            crate::events::Event::new(
+                                                crate::events::EventVariant::Fetched { elapsed_ms },
+                                            ),
+                                        ),
+                                    );
+                                    return_cb(CachedOrFetchCbInput {
+                                        cached: scope.get(&key_hash).expect("Just set. (bug)"),
+                                        variant: CachedOrFetchCbInputVariant::Fresh,
+                                    })
+                                }
+                            }
+                            MaybeNewValue::SsrStreamedValueOverride => {
+                                return_cb(CachedOrFetchCbInput {
+                                    cached: scope
+                                        .get(&key_hash)
+                                        .expect("Should contain value streamed from server. (bug)"),
+                                    variant: CachedOrFetchCbInputVariant::Fresh,
+                                })
+                            }
                         }
                     },
                 );

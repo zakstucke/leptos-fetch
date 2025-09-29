@@ -32,8 +32,7 @@ pub fn App() -> impl IntoView {
     let refetch_enabled = RwSignal::new(true);
     let client = QueryClient::new()
         .with_options(QueryOptions::default().with_stale_time(Duration::from_secs(10)))
-        // TODO .into() should work with the latest version of leptos after https://github.com/leptos-rs/leptos/pull/4258
-        .with_refetch_enabled_toggle(Signal::derive(move || refetch_enabled.get()))
+        .with_refetch_enabled_toggle(refetch_enabled)
         .provide();
 
     view! {
