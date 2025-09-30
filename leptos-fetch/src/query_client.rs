@@ -642,12 +642,11 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     let mut was_pending = false;
                                     // Protect against race condition: cancel any frontend query that started already if there was a client side 
                                     // local resource or prefetch/fetch_query etc that started on the initial client-side ticks:
-                                    if let Some(QueryOrPending::Pending { query_abort_tx, .. }) = scope.get_mut_include_pending(&key_hash) {
-                                        if let Some(tx) = query_abort_tx.take() {
+                                    if let Some(QueryOrPending::Pending { query_abort_tx, .. }) = scope.get_mut_include_pending(&key_hash)
+                                        && let Some(tx) = query_abort_tx.take() {
                                             tx.send(QueryAbortReason::SsrStreamedValueOverride).unwrap();
                                             was_pending = true;
                                         }
-                                    }
 
                                     if was_pending || !scope.contains_key(&key_hash) {
                                         let query = Query::new(
@@ -1097,25 +1096,23 @@ impl<Codec: 'static> QueryClient<Codec> {
             false,
             |_| {},
             |maybe_scope, _| {
-                if let Some(scope) = maybe_scope {
-                    if let Some(cached) = scope.get_mut(&key_hash) {
-                        let modifier = modifier_holder
-                            .take()
-                            .expect("Should never be used more than once. (bug)");
-                        let return_value = cached.update_value(
-                            // WONTPANIC: the internals will only supply the value if available from this thread:
-                            |value| modifier(Some(value.value_mut_may_panic())),
-                            #[cfg(any(
-                                all(debug_assertions, feature = "devtools"),
-                                feature = "devtools-always"
-                            ))]
-                            crate::events::Event::new(
-                                crate::events::EventVariant::DeclarativeUpdate,
-                            ),
-                            reset_invalidated,
-                        );
-                        return Some(return_value);
-                    }
+                if let Some(scope) = maybe_scope
+                    && let Some(cached) = scope.get_mut(&key_hash)
+                {
+                    let modifier = modifier_holder
+                        .take()
+                        .expect("Should never be used more than once. (bug)");
+                    let return_value = cached.update_value(
+                        // WONTPANIC: the internals will only supply the value if available from this thread:
+                        |value| modifier(Some(value.value_mut_may_panic())),
+                        #[cfg(any(
+                            all(debug_assertions, feature = "devtools"),
+                            feature = "devtools-always"
+                        ))]
+                        crate::events::Event::new(crate::events::EventVariant::DeclarativeUpdate),
+                        reset_invalidated,
+                    );
+                    return Some(return_value);
                 }
                 None
             },
@@ -1788,10 +1785,10 @@ impl<Codec: 'static> QueryClient<Codec> {
             |maybe_scope, _| {
                 if let Some(scope) = maybe_scope {
                     for query in scope.all_queries_mut_include_pending() {
-                        if let Some(key) = query.key().value_if_safe() {
-                            if should_invalidate(key) {
-                                query.invalidate(QueryAbortReason::Invalidate);
-                            }
+                        if let Some(key) = query.key().value_if_safe()
+                            && should_invalidate(key)
+                        {
+                            query.invalidate(QueryAbortReason::Invalidate);
                         }
                     }
                 }
@@ -1981,10 +1978,10 @@ impl<Codec: 'static> QueryClient<Codec> {
             false,
             |_| {},
             |maybe_scope, _| {
-                if let Some(scope) = maybe_scope {
-                    if let Some(query) = scope.get_mut(&KeyHash::new(key.borrow())) {
-                        query.mark_valid();
-                    }
+                if let Some(scope) = maybe_scope
+                    && let Some(query) = scope.get_mut(&KeyHash::new(key.borrow()))
+                {
+                    query.mark_valid();
                 }
             },
         );

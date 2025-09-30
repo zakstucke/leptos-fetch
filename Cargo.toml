@@ -11,13 +11,14 @@ edition = "2024"
 keywords = ["leptos"]
 description = "Async query manager for Leptos"
 readme = "./leptos-fetch/README.md"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 any_spawner = "0.3.0"
-hydration_context = "0.3"
+hydration_context = "0.3.0"
 codee = "0.3"
-leptos = "0.8.4"
+reactive_graph = "0.2.8"
+leptos = "0.8.10"
 
 chrono = "0.4"
 chrono-humanize = "0.2"

@@ -44,12 +44,12 @@ impl QueryOptions {
     /// Default: `5 minutes`
     #[track_caller]
     pub fn with_gc_time(mut self, gc_time: std::time::Duration) -> Self {
-        if let Some(stale_time) = self.stale_time {
-            if stale_time > gc_time {
-                // If stale_time is greater than gc_time, stale_time will be set to gc_time.
-                self.stale_time = Some(gc_time);
-                return self;
-            }
+        if let Some(stale_time) = self.stale_time
+            && stale_time > gc_time
+        {
+            // If stale_time is greater than gc_time, stale_time will be set to gc_time.
+            self.stale_time = Some(gc_time);
+            return self;
         }
         self.gc_time = Some(gc_time);
         self

@@ -235,18 +235,18 @@ impl<K, V> Query<K, V> {
                     |maybe_scope, refetch_enabled| {
                         if refetch_enabled {
                             // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
-                            if let Some(scope) = maybe_scope {
-                                if let Some(cached) = scope.get_mut(&key_hash) {
-                                    cached.invalidate(QueryAbortReason::Invalidate);
-                                    #[cfg(any(
-                                        all(debug_assertions, feature = "devtools"),
-                                        feature = "devtools-always"
-                                    ))]
-                                    {
-                                        cached.events.push(crate::events::Event::new(
+                            if let Some(scope) = maybe_scope
+                                && let Some(cached) = scope.get_mut(&key_hash)
+                            {
+                                cached.invalidate(QueryAbortReason::Invalidate);
+                                #[cfg(any(
+                                    all(debug_assertions, feature = "devtools"),
+                                    feature = "devtools-always"
+                                ))]
+                                {
+                                    cached.events.push(crate::events::Event::new(
                                     crate::events::EventVariant::RefetchTriggeredViaInvalidation,
                                 ));
-                                    }
                                 }
                             }
                             RefetchCbResult::Ok

@@ -120,23 +120,21 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                     let value_existed_at_one_point = AtomicBool::new(false);
                     ArcSignal::derive(move || {
                         // Will be None when the query has been gc'd:
-                        if value_set_updated_or_removed_signal.get().is_some() {
-                            if let Some(scope) =
+                        if value_set_updated_or_removed_signal.get().is_some()
+                            && let Some(scope) =
                                 client.scope_lookup.scopes().get(&query_info.cache_key)
-                            {
-                                if let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash) {
-                                    // So is_gced isn't true during the initial period where the query hasn't finished fetching yet:
-                                    value_existed_at_one_point
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                                    return ValueDerivs {
-                                        // WONTPANIC: always on single-threaded client
-                                        debug_value: dyn_query.debug_value_may_panic(),
-                                        updated_at: dyn_query.updated_at(),
-                                        is_gced: false,
-                                    };
-                                };
-                            }
-                        }
+                            && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
+                        {
+                            // So is_gced isn't true during the initial period where the query hasn't finished fetching yet:
+                            value_existed_at_one_point
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            return ValueDerivs {
+                                // WONTPANIC: always on single-threaded client
+                                debug_value: dyn_query.debug_value_may_panic(),
+                                updated_at: dyn_query.updated_at(),
+                                is_gced: false,
+                            };
+                        };
                         ValueDerivs {
                             debug_value: DebugValue::new(&"Fetching..."),
                             updated_at: Utc::now(),
@@ -159,14 +157,12 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                     ArcSignal::derive(move || {
                         // Events are the only subscription that updates on invalidated:
                         events.track();
-                        if value_set_updated_or_removed_signal.get().is_some() {
-                            if let Some(scope) =
+                        if value_set_updated_or_removed_signal.get().is_some()
+                            && let Some(scope) =
                                 client.scope_lookup.scopes().get(&query_info.cache_key)
-                            {
-                                if let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash) {
-                                    return dyn_query.is_invalidated();
-                                }
-                            }
+                            && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
+                        {
+                            return dyn_query.is_invalidated();
                         }
                         false
                     })
@@ -197,28 +193,26 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                         }
 
                         // Will be None when the query has been gc'd:
-                        if value_set_updated_or_removed_signal.get().is_some() {
-                            if let Some(scope) =
+                        if value_set_updated_or_removed_signal.get().is_some()
+                            && let Some(scope) =
                                 client.scope_lookup.scopes().get(&query_info.cache_key)
-                            {
-                                if let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash) {
-                                    if let Some(till_stale) = dyn_query.till_stale() {
-                                        let handle = safe_set_timeout(
-                                            {
-                                                let is_stale_buster = is_stale_buster.clone();
-                                                move || {
-                                                    is_stale_buster.set(new_buster_id());
-                                                }
-                                            },
-                                            till_stale,
-                                        );
-                                        is_stale_recheck_handle.set(Some(handle));
-                                    } else {
-                                        return true;
-                                    }
-                                };
+                            && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
+                        {
+                            if let Some(till_stale) = dyn_query.till_stale() {
+                                let handle = safe_set_timeout(
+                                    {
+                                        let is_stale_buster = is_stale_buster.clone();
+                                        move || {
+                                            is_stale_buster.set(new_buster_id());
+                                        }
+                                    },
+                                    till_stale,
+                                );
+                                is_stale_recheck_handle.set(Some(handle));
+                            } else {
+                                return true;
                             }
-                        }
+                        };
                         false
                     })
                 };
