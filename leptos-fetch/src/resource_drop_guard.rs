@@ -32,14 +32,14 @@ where
     pub fn set_active_key(&self, active_key_hash: KeyHash) {
         let mut guard = self.0.lock();
         // If key changing, should mark the previous as dropped:
-        if let Some(old_active_key_hash) = guard.active_key_hash {
-            if old_active_key_hash != active_key_hash {
-                guard.scope_lookup.mark_resource_dropped::<K, V>(
-                    &old_active_key_hash,
-                    &guard.cache_key,
-                    guard.resource_id,
-                );
-            }
+        if let Some(old_active_key_hash) = guard.active_key_hash
+            && old_active_key_hash != active_key_hash
+        {
+            guard.scope_lookup.mark_resource_dropped::<K, V>(
+                &old_active_key_hash,
+                &guard.cache_key,
+                guard.resource_id,
+            );
         }
         guard.active_key_hash = Some(active_key_hash);
     }

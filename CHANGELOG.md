@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+Leptos bumped to version `0.8.10` for new `Owner::parent` method, increases MSRV to `1.88`. ([#50](https://github.com/zakstucke/leptos-fetch/pull/50))
+
 ### Fixed
 - Fix race condition between streamed resource queries and local queries [#48](https://github.com/zakstucke/leptos-fetch/issues/48). ([#49](https://github.com/zakstucke/leptos-fetch/pull/49))
 

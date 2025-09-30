@@ -387,12 +387,11 @@ impl ScopeSubs {
             .subs
             .lock()
             .get_mut(&(cache_key, ACTIVE_RESOURCES_ID, key_hash))
+            && let SubVariant::ActiveResources(signal) = &sub.variant
         {
-            if let SubVariant::ActiveResources(signal) = &sub.variant {
-                // Don't want to trigger if not changing:
-                if signal.get_untracked() != active_resources {
-                    signal.set(active_resources);
-                }
+            // Don't want to trigger if not changing:
+            if signal.get_untracked() != active_resources {
+                signal.set(active_resources);
             }
         }
     }
@@ -406,10 +405,9 @@ impl ScopeSubs {
             self.subs
                 .lock()
                 .get_mut(&(cache_key, VALUE_SET_UPDATED_OR_REMOVED_ID, key_hash))
+            && let SubVariant::ValueSetUpdatedOrRemoved(signal) = &sub.variant
         {
-            if let SubVariant::ValueSetUpdatedOrRemoved(signal) = &sub.variant {
-                signal.set(new_value_modified_id());
-            }
+            signal.set(new_value_modified_id());
         }
     }
 
@@ -427,10 +425,9 @@ impl ScopeSubs {
             .subs
             .lock()
             .get_mut(&(cache_key, EVENTS_UPDATED_ID, key_hash))
+            && let SubVariant::EventsUpdated(signal) = &sub.variant
         {
-            if let SubVariant::EventsUpdated(signal) = &sub.variant {
-                signal.set(new_events.to_vec());
-            }
+            signal.set(new_events.to_vec());
         }
     }
 
@@ -497,16 +494,13 @@ struct SubDropGuard {
 impl SubDropGuard {
     fn set_key_hash(&self, subs_guard: &mut SubsInner, key_hash: KeyHash) {
         let mut guard = self.key_hash.lock();
-        if let Some(old_key_hash) = guard.take() {
-            if old_key_hash != key_hash {
-                if let Some(sub) =
-                    subs_guard.get_mut(&(self.cache_key, self.variant_id, old_key_hash))
-                {
-                    sub.remove_listener(self.listener_id);
-                    if sub.orphaned() {
-                        subs_guard.remove(&(self.cache_key, self.variant_id, old_key_hash));
-                    }
-                }
+        if let Some(old_key_hash) = guard.take()
+            && old_key_hash != key_hash
+            && let Some(sub) = subs_guard.get_mut(&(self.cache_key, self.variant_id, old_key_hash))
+        {
+            sub.remove_listener(self.listener_id);
+            if sub.orphaned() {
+                subs_guard.remove(&(self.cache_key, self.variant_id, old_key_hash));
             }
         }
         *guard = Some(key_hash);
@@ -516,12 +510,12 @@ impl SubDropGuard {
 impl Drop for SubDropGuard {
     fn drop(&mut self) {
         let mut subs_guard = self.subs.lock();
-        if let Some(key_hash) = self.key_hash.lock().take() {
-            if let Some(sub) = subs_guard.get_mut(&(self.cache_key, self.variant_id, key_hash)) {
-                sub.remove_listener(self.listener_id);
-                if sub.orphaned() {
-                    subs_guard.remove(&(self.cache_key, self.variant_id, key_hash));
-                }
+        if let Some(key_hash) = self.key_hash.lock().take()
+            && let Some(sub) = subs_guard.get_mut(&(self.cache_key, self.variant_id, key_hash))
+        {
+            sub.remove_listener(self.listener_id);
+            if sub.orphaned() {
+                subs_guard.remove(&(self.cache_key, self.variant_id, key_hash));
             }
         }
     }
