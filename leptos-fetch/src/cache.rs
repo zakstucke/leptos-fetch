@@ -8,19 +8,18 @@ use std::{
 };
 
 use futures::FutureExt;
-use leptos::prelude::{ArcRwSignal, ArcSignal, ScopedFuture, untrack};
+use leptos::prelude::{ArcRwSignal, ArcSignal};
 
 use crate::{
     QueryOptions,
     cache_scope::{QueryAbortReason, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
-    no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture,
     query::Query,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{KeyHash, OnDrop, ResetInvalidated, new_buster_id, new_scope_id},
+    utils::{KeyHash, OnDrop, OwnerChain, ResetInvalidated, new_buster_id, new_scope_id},
 };
 
 pub(crate) trait Busters: 'static {
@@ -463,6 +462,7 @@ impl ScopeLookup {
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
@@ -578,12 +578,7 @@ impl ScopeLookup {
                                         &maybe_local_key,
                                     );
 
-                                // Want to explictly remove the observer so there's no "leak through" reactivity in some contexts but not others and therefore strange behaviour.
-                                let fut = untrack(|| {
-                                    ScopedFuture::new_untracked(NoReactiveDiagnosticsFuture::new(
-                                        fetcher(key.clone()),
-                                    ))
-                                });
+                                let fut = owner_chain.with(|| fetcher(key.clone()));
 
                                 futures::select_biased! {
                                     rx_result = query_abort_rx.fuse() => {

@@ -4,13 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.4.6](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.6)
+
 ### Added
 Leptos bumped to version `0.8.10` for new `Owner::parent` method, increases MSRV to `1.88`. ([#50](https://github.com/zakstucke/leptos-fetch/pull/50))
 
 ### Fixed
 - Fix race condition between streamed resource queries and local queries [#48](https://github.com/zakstucke/leptos-fetch/issues/48). ([#49](https://github.com/zakstucke/leptos-fetch/pull/49))
-
----
+- Preserve the chain of owners available at the start of a query for its duration, to prevent sporadic owner/context failures in query functions. ([#51](https://github.com/zakstucke/leptos-fetch/pull/50))
 
 ## [0.4.5](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.5)
 

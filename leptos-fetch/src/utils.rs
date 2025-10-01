@@ -1,9 +1,11 @@
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
-    sync::atomic::AtomicU64,
+    sync::{Arc, atomic::AtomicU64},
 };
 
-use leptos::prelude::TimeoutHandle;
+use leptos::prelude::{Owner, ScopedFuture, TimeoutHandle, untrack};
+
+use crate::no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture;
 
 macro_rules! defined_id_gen {
     ($name:ident) => {
@@ -109,7 +111,7 @@ pub(crate) enum ResetInvalidated {
 /// Works around potential panic reported in https://github.com/zakstucke/leptos-fetch/issues/43
 /// until my internal fix is upstreamed into leptos (https://github.com/leptos-rs/leptos/pull/4212)
 #[track_caller]
-pub fn safe_set_timeout(
+pub(crate) fn safe_set_timeout(
     cb: impl FnOnce() + 'static,
     duration: std::time::Duration,
 ) -> TimeoutHandle {
@@ -122,4 +124,40 @@ pub fn safe_set_timeout(
         },
     )
     .expect("leptos::prelude::set_timeout_with_handle() failed to spawn")
+}
+
+/// An owned ancestry chain of owners, preventing anything dropping until this is dropped.
+#[derive(Clone)]
+pub(crate) struct OwnerChain(Arc<Vec<Owner>>);
+
+/// Accepts None to make the method usage usable even when no owner exists.
+impl OwnerChain {
+    pub fn new(owner: Option<Owner>) -> Self {
+        let mut owners = vec![];
+        let mut next_owner = owner;
+        while let Some(o) = next_owner {
+            next_owner = o.parent();
+            owners.push(o);
+        }
+        Self(Arc::new(owners))
+    }
+
+    fn active_owner(&self) -> Option<&Owner> {
+        self.0.first()
+    }
+
+    // Run the async future, and initial function creating it, with the active owner if there is one.
+    pub async fn with<T, Fut>(&self, f: impl FnOnce() -> Fut) -> T
+    where
+        Fut: Future<Output = T>,
+    {
+        if let Some(owner) = self.active_owner() {
+            // Explicitly disabling diagnostics and removing observer to prevent "leak through" reactivity in local resources
+            owner
+                .with(|| ScopedFuture::new_untracked(NoReactiveDiagnosticsFuture::new(untrack(f))))
+                .await
+        } else {
+            f().await
+        }
+    }
 }
