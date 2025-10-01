@@ -139,9 +139,6 @@ impl OwnerChain {
             next_owner = o.parent();
             owners.push(o);
         }
-        if owners.len() > 1 {
-            owners.pop();
-        }
         Self(Arc::new(owners))
     }
 
