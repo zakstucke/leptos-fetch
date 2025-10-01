@@ -41,10 +41,8 @@ pub fn TestCaseOwnerCleanup() -> impl IntoView {
     }
 }
 
-
 #[derive(Debug, Clone, Copy)]
 struct TestCaseOwnerCleanupCtx;
-
 
 #[component]
 pub fn OwnerCleanupTestComponentChild() -> impl IntoView {
@@ -55,12 +53,10 @@ pub fn OwnerCleanupTestComponentChild() -> impl IntoView {
         client.resource(
             {
                 let _owner = owner.clone();
-                move || {
-                    async move {
-                        expect_context::<TestCaseOwnerCleanupCtx>();
-                        sleep_compat(Duration::from_millis(1000)).await;
-                        expect_context::<TestCaseOwnerCleanupCtx>();
-                    }
+                move || async move {
+                    expect_context::<TestCaseOwnerCleanupCtx>();
+                    sleep_compat(Duration::from_millis(1000)).await;
+                    expect_context::<TestCaseOwnerCleanupCtx>();
                 }
             },
             || (),
