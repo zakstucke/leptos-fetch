@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file.
 
 ## [0.4.6](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.6)
 
+
 ### Added
 Leptos bumped to version `0.8.10` for new `Owner::parent` method, increases MSRV to `1.88`. ([#50](https://github.com/zakstucke/leptos-fetch/pull/50))
 
