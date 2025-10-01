@@ -5,7 +5,7 @@
 #![warn(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 // When docs auto created for docs.rs, will include features, given docs.rs uses nightly by default:
-#![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_auto_cfg))]
+#![cfg_attr(all(doc, CHANNEL_NIGHTLY), feature(doc_cfg))]
 
 mod arc_local_signal;
 mod cache;
