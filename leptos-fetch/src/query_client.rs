@@ -13,8 +13,8 @@ use codee::{Decoder, Encoder};
 use futures::pin_mut;
 use leptos::{
     prelude::{
-        ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Read, ReadUntracked,
-        ScopedFuture, Set, Signal, Track, provide_context,
+        ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Owner, Read,
+        ReadUntracked, Set, Signal, Track, provide_context,
     },
     server::{
         ArcLocalResource, ArcResource, FromEncodedStr, IntoEncodedString, LocalResource, Resource,
@@ -32,7 +32,7 @@ use crate::{
     query_maybe_key::QueryMaybeKey,
     query_scope::{QueryScopeInfo, QueryScopeLocalTrait, QueryScopeTrait, ScopeCacheKey},
     resource_drop_guard::ResourceDropGuard,
-    utils::{KeyHash, ResetInvalidated, new_buster_id, new_resource_id},
+    utils::{KeyHash, OwnerChain, ResetInvalidated, new_buster_id, new_resource_id},
 };
 
 use super::cache::ScopeLookup;
@@ -266,6 +266,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(key) = maybe_key.as_ref() {
                     drop_guard.set_active_key(KeyHash::new(key));
                 }
+                let owner_chain = OwnerChain::new(Owner::current());
                 async move {
                     if let Some(key) = maybe_key {
                         let value = scope_lookup
@@ -293,14 +294,29 @@ impl<Codec: 'static> QueryClient<Codec> {
                                             {
                                                 let key = key.clone();
                                                 let query_scope = query_scope.clone();
+                                                let owner_chain = owner_chain.clone();
                                                 // Just adding the SendWrapper and using spawn() rather than spawn_local() to fix tests:
-                                                leptos::task::spawn(SendWrapper::new(
-                                                    ScopedFuture::new(async move {
-                                                        client
-                                                            .prefetch_query_local(query_scope, &key)
-                                                            .await;
-                                                    }),
-                                                ));
+                                                leptos::task::spawn(SendWrapper::new(async move {
+                                                    client
+                                                        .prefetch_inner(
+                                                            QueryScopeInfo::new_local(&query_scope),
+                                                            query_scope
+                                                                .invalidation_prefix(key.borrow()),
+                                                            async move |key| {
+                                                                MaybeLocal::new_local(
+                                                                    query_scope.query(key).await,
+                                                                )
+                                                            },
+                                                            key.borrow(),
+                                                            || {
+                                                                MaybeLocal::new_local(
+                                                                    key.borrow().clone(),
+                                                                )
+                                                            },
+                                                            &owner_chain,
+                                                        )
+                                                        .await;
+                                                }));
                                             }
                                         }
                                         CachedOrFetchCbInputVariant::Fresh => {}
@@ -315,6 +331,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                 },
                                 None,
                                 || MaybeLocal::new_local(key.clone()),
+                                &owner_chain,
                             )
                             .await;
                         MaybeKey::prepare_mapped_value(Some(value))
@@ -518,6 +535,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                         .and_then(|key| query_scope.invalidation_prefix(key));
                     let buster_if_uncached = buster_if_uncached.clone();
                     let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
+                    let owner_chain = OwnerChain::new(Owner::current());
                     async move {
                         if let Some(key) = maybe_key {
                             let value = scope_lookup
@@ -544,13 +562,31 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                 {
                                                     let key = key.clone();
                                                     let query_scope = query_scope.clone();
-                                                    leptos::task::spawn(ScopedFuture::new(
-                                                        async move {
-                                                            client
-                                                                .prefetch_query(query_scope, &key)
-                                                                .await;
-                                                        },
-                                                    ));
+                                                    let owner_chain = owner_chain.clone();
+                                                    leptos::task::spawn(async move {
+                                                        client
+                                                            .prefetch_inner(
+                                                                QueryScopeInfo::new(&query_scope),
+                                                                query_scope.invalidation_prefix(
+                                                                    key.borrow(),
+                                                                ),
+                                                                async move |key| {
+                                                                    MaybeLocal::new(
+                                                                        query_scope
+                                                                            .query(key)
+                                                                            .await,
+                                                                    )
+                                                                },
+                                                                key.borrow(),
+                                                                || {
+                                                                    MaybeLocal::new(
+                                                                        key.borrow().clone(),
+                                                                    )
+                                                                },
+                                                                &owner_chain,
+                                                            )
+                                                            .await;
+                                                    });
                                                 }
 
                                                 // Handle edge case where the key function saw it was uncached, so entered here,
@@ -578,6 +614,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     },
                                     None,
                                     || MaybeLocal::new(key.clone()),
+                                    &owner_chain,
                                 )
                                 .await;
                             MaybeKey::prepare_mapped_value(Some(value))
@@ -744,6 +781,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             async move |key| MaybeLocal::new(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -770,6 +808,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             async move |key| MaybeLocal::new_local(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new_local(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -782,6 +821,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         key: &K,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
@@ -812,6 +852,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 },
                 None,
                 lazy_maybe_local_key,
+                owner_chain,
             )
             .await;
     }
@@ -842,6 +883,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             key.borrow(),
             None,
             || MaybeLocal::new(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -872,6 +914,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             key.borrow(),
             None,
             || MaybeLocal::new_local(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -885,6 +928,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: &K,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
     ) -> V
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
@@ -919,6 +963,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 },
                 maybe_preheld_fetcher_mutex_guard,
                 lazy_maybe_local_key,
+                owner_chain,
             )
             .await
     }
@@ -1156,6 +1201,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             mapper,
             MaybeLocal::new,
             || MaybeLocal::new(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -1189,6 +1235,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             mapper,
             MaybeLocal::new_local,
             || MaybeLocal::new_local(key.borrow().clone()),
+            &OwnerChain::new(Owner::current()),
         )
         .await
     }
@@ -1203,6 +1250,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         mapper: impl AsyncFnOnce(&mut V) -> T,
         into_maybe_local: impl FnOnce(V) -> MaybeLocal<V>,
         lazy_maybe_local_key: impl Fn() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
     ) -> T
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
@@ -1224,6 +1272,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 key.borrow(),
                 Some(&fetcher_guard),
                 &lazy_maybe_local_key,
+                owner_chain,
             )
             .await;
 
