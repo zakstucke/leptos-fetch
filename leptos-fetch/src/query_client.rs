@@ -266,6 +266,9 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(key) = maybe_key.as_ref() {
                     drop_guard.set_active_key(KeyHash::new(key));
                 }
+                // Note: cannot hoist outside of resource, 
+                // it prevents the resource itself dropping when the owner is held by the resource itself, 
+                // here each instance only lasts as long as the query.
                 let owner_chain = OwnerChain::new(Owner::current());
                 async move {
                     if let Some(key) = maybe_key {
@@ -535,6 +538,9 @@ impl<Codec: 'static> QueryClient<Codec> {
                         .and_then(|key| query_scope.invalidation_prefix(key));
                     let buster_if_uncached = buster_if_uncached.clone();
                     let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
+                    // Note: cannot hoist outside of resource, 
+                    // it prevents the resource itself dropping when the owner is held by the resource itself, 
+                    // here each instance only lasts as long as the query.                    
                     let owner_chain = OwnerChain::new(Owner::current());
                     async move {
                         if let Some(key) = maybe_key {
