@@ -3,10 +3,10 @@ use std::{
     time::Duration,
 };
 
-use leptos::prelude::*;
+use leptos::{prelude::*};
 use leptos_fetch::{QueryClient, QueryDevtools, QueryOptions, QueryScope};
 
-use crate::blog_list::BlogList;
+use crate::{blog_list::BlogList, testcases::TestCases};
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     view! {
@@ -80,5 +80,7 @@ pub fn RefetchExample(refetch_enabled: RwSignal<bool>) -> impl IntoView {
                 </p>
             </Suspense>
         </div>
+        <TestCases />
     }
 }
+
