@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{QueryOptions, maybe_local::MaybeLocal};
+use crate::{maybe_local::MaybeLocal, QueryOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeCacheKey(u64);
@@ -186,7 +186,9 @@ macro_rules! define {
                     self
                 }
 
-                /// Additive callbacks to be run when this query with a specific key is invalidated.
+                /// Run a callback when a query is invalidated.
+                /// Will only run once when a query is first invalidated,
+                /// and not on repeated invalidations before a refresh/reset.
                 pub fn on_invalidation(
                     mut self,
                     on_invalidation_cb: impl Fn(&K) + 'static $($impl_fn_generics)*,

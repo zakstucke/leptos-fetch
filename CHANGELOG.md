@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- User callbacks on query invalidation with [`QueryScope::on_invalidation`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.on_invalidation) and [`QueryScopeLocal::on_invalidation`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html#method.on_invalidation) ([#57](https://github.com/zakstucke/leptos-fetch/pull/57))
+
 ### Fixed
 - Replaced spawn during invalidation with internal callbacks. ([#56](https://github.com/zakstucke/leptos-fetch/pull/56))
 
