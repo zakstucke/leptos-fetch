@@ -77,6 +77,7 @@ macro_rules! define {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
             invalidation_hierarchy_fn: Option<Arc<dyn Fn(&K) -> Vec<String> $($impl_fn_generics)*>>,
             on_invalidation: Vec<Arc<dyn Fn(&K) $($impl_fn_generics)*>>,
+            on_gc: Vec<Arc<dyn Fn(&K) $($impl_fn_generics)*>>,
             fetcher_type_id: TypeId,
             cache_key: ScopeCacheKey,
             options: QueryOptions,
@@ -124,6 +125,7 @@ macro_rules! define {
                         title: query_scope.title(),
                         invalidation_hierarchy_fn: None,
                         on_invalidation: vec![],
+                        on_gc: vec![],
                         query: Arc::new(move |key| Box::pin(query_scope.query(key))),
                     }
                 }
@@ -197,6 +199,15 @@ macro_rules! define {
                     self
                 }
 
+                /// Run a callback when a query is garbage collected.
+                pub fn on_gc(
+                    mut self,
+                    on_gc_cb: impl Fn(&K) + 'static $($impl_fn_generics)*,
+                ) -> Self {
+                    self.on_gc.push(Arc::new(on_gc_cb));
+                    self
+                }
+
                 #[cfg(any(feature = "devtools", feature = "devtools-always"))]
                 /// Set a custom query scope/type title that will show in devtools.
                 #[track_caller]
@@ -229,8 +240,9 @@ macro_rules! define {
 
                 fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>>;
 
-                #[allow(unused_parens)]
                 fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>>;
+
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>>;
 
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
@@ -268,6 +280,10 @@ macro_rules! define {
                     None
                 }
 
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    None
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -300,8 +316,11 @@ macro_rules! define {
                     None
                 }
 
-                #[allow(unused_parens)]
                 fn on_invalidation(&self) -> Option<Arc<dyn Fn(&()) $($impl_fn_generics)*>> {
+                    None
+                }
+
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&()) $($impl_fn_generics)*>> {
                     None
                 }
 
@@ -344,12 +363,24 @@ macro_rules! define {
                     }
                 }
 
-                #[allow(unused_parens)]
                 fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
                     if self.on_invalidation.is_empty() {
                         None
                     } else {
                         let callbacks = self.on_invalidation.clone();
+                        Some(Arc::new(move |key| {
+                            for cb in &callbacks {
+                                cb(key);
+                            }
+                        }))
+                    }
+                }
+
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    if self.on_gc.is_empty() {
+                        None
+                    } else {
+                        let callbacks = self.on_gc.clone();
                         Some(Arc::new(move |key| {
                             for cb in &callbacks {
                                 cb(key);
@@ -397,12 +428,24 @@ macro_rules! define {
                     }
                 }
 
-                #[allow(unused_parens)]
                 fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
                     if self.on_invalidation.is_empty() {
                         None
                     } else {
                         let callbacks = self.on_invalidation.clone();
+                        Some(Arc::new(move |key| {
+                            for cb in &callbacks {
+                                cb(key);
+                            }
+                        }))
+                    }
+                }
+
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    if self.on_gc.is_empty() {
+                        None
+                    } else {
+                        let callbacks = self.on_gc.clone();
                         Some(Arc::new(move |key| {
                             for cb in &callbacks {
                                 cb(key);
@@ -447,9 +490,12 @@ macro_rules! define {
                     T::invalidation_prefix(self, key)
                 }
 
-                #[allow(unused_parens)]
                 fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
                     T::on_invalidation(self)
+                }
+
+                fn on_gc(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    T::on_gc(self)
                 }
 
                 #[cfg(any(
@@ -505,6 +551,19 @@ where
         }
     }
 
+    fn on_gc(&self) -> Option<Arc<dyn Fn(&K)>> {
+        if self.on_gc.is_empty() {
+            None
+        } else {
+            let callbacks = self.on_gc.clone();
+            Some(Arc::new(move |key| {
+                for cb in &callbacks {
+                    cb(key);
+                }
+            }))
+        }
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -546,6 +605,19 @@ where
             None
         } else {
             let callbacks = self.on_invalidation.clone();
+            Some(Arc::new(move |key| {
+                for cb in &callbacks {
+                    cb(key);
+                }
+            }))
+        }
+    }
+
+    fn on_gc(&self) -> Option<Arc<dyn Fn(&K)>> {
+        if self.on_gc.is_empty() {
+            None
+        } else {
+            let callbacks = self.on_gc.clone();
             Some(Arc::new(move |key| {
                 for cb in &callbacks {
                     cb(key);
@@ -615,6 +687,7 @@ impl QueryScopeInfo {
 
 pub(crate) struct QueryScopeQueryInfo<K> {
     pub on_invalidation: Option<MaybeLocal<Arc<dyn Fn(&K)>>>,
+    pub on_gc: Option<MaybeLocal<Arc<dyn Fn(&K)>>>,
     pub invalidation_prefix: Option<Vec<String>>,
     _key_marker: std::marker::PhantomData<K>,
 }
@@ -632,7 +705,10 @@ where
         Self {
             on_invalidation: query_scope
                 .on_invalidation()
-                .map(MaybeLocal::new_invalidation_cb_special),
+                .map(MaybeLocal::new_arc_with_key_arg_special),
+            on_gc: query_scope
+                .on_gc()
+                .map(MaybeLocal::new_arc_with_key_arg_special),
             invalidation_prefix: query_scope.invalidation_prefix(key),
             _key_marker: std::marker::PhantomData,
         }
@@ -645,6 +721,7 @@ where
     {
         Self {
             on_invalidation: query_scope.on_invalidation().map(MaybeLocal::new_local),
+            on_gc: query_scope.on_gc().map(MaybeLocal::new_local),
             invalidation_prefix: query_scope.invalidation_prefix(key),
             _key_marker: std::marker::PhantomData,
         }

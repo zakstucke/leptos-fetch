@@ -73,7 +73,7 @@ where
 
 impl<K> MaybeLocal<Arc<dyn Fn(&K)>> {
     /// Just fixes an annoying specific usecase in QueryScopeQueryInfo::new
-    pub fn new_invalidation_cb_special(cb: Arc<dyn Fn(&K) + Send + Sync>) -> Self {
+    pub fn new_arc_with_key_arg_special(cb: Arc<dyn Fn(&K) + Send + Sync>) -> Self {
         Self(Inner::Threadsafe(cb))
     }
 }

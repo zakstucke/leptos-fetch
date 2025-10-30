@@ -185,6 +185,7 @@ impl<K, V> Query<K, V> {
 
         let invalidation_prefix = query_scope_info_for_new_query.invalidation_prefix;
         let on_invalidation = query_scope_info_for_new_query.on_invalidation;
+        let on_gc = query_scope_info_for_new_query.on_gc;
 
         // Add to the invalidation prefix trie/hierarchy on creation:
         if let Some(invalidation_prefix) = &invalidation_prefix {
@@ -197,6 +198,7 @@ impl<K, V> Query<K, V> {
             && combined_options.gc_time() < Duration::from_secs(60 * 60 * 24 * 365)
         {
             let active_resources = active_resources.clone();
+            let key = key.clone();
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             let invalidation_prefix = invalidation_prefix.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
@@ -208,6 +210,12 @@ impl<K, V> Query<K, V> {
                         scope_lookup
                             .invalidation_trie()
                             .remove(invalidation_prefix, &(cache_key, key_hash));
+                    }
+
+                    // Run the user callback if any:
+                    if let Some(on_gc) = &on_gc {
+                        let key = (*key.value_may_panic()).clone();
+                        on_gc.value_may_panic()(&key);
                     }
 
                     true

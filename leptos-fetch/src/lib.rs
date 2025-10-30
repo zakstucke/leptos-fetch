@@ -1022,9 +1022,21 @@ mod test {
                         }
                     }
                 };
+
+
+
                 let fetcher = QueryScope::new(
                     fetcher
                 ).with_options(QueryOptions::new().with_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
+
+                let gc_counts = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+                let fetcher = fetcher.on_gc({
+                    let gc_counts = gc_counts.clone();
+                    move |key| {
+                        let mut counts = gc_counts.lock();
+                        *counts.entry(*key).or_insert(0) += 1;
+                    }
+                });
 
                 let (client, _guard, owner) = prep_vari!(false);
 
@@ -1059,6 +1071,7 @@ mod test {
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
+                                assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
                             // all resources dropped when <gc_time shouldn't have cleaned up:
@@ -1068,6 +1081,7 @@ mod test {
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
+                                assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
                             // >gc_time when active resource shouldn't have cleaned up:
@@ -1082,6 +1096,7 @@ mod test {
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                 assert_eq!(client.size(), 1);
+                                assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
                             // >gc_time and no resources should now have been cleaned up, causing a new fetch:
@@ -1092,6 +1107,7 @@ mod test {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(GC_TIME_MS)).await;
                                 tick!();
                                 assert_eq!(subscribed.get_untracked(), None);
+                                assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 1);
 
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
@@ -1102,6 +1118,7 @@ mod test {
                             tick!();
                             assert_eq!(client.size(), 0);
                             assert_eq!(subscribed.get_untracked(), None);
+                            assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 2);
                         }
                     }};
                 }
