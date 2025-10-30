@@ -16,7 +16,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
-    query_scope::{QueryScopeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
     safe_dt_dur_add,
     utils::{KeyHash, ResetInvalidated, new_buster_id},
     value_with_callbacks::{GcHandle, GcValue, RefetchCbResult, RefetchHandle},
@@ -28,6 +28,7 @@ pub(crate) struct Query<K, V: 'static> {
     pub combined_options: QueryOptions,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     invalidation_prefix: Option<Vec<String>>,
+    on_invalidation: Option<MaybeLocal<Arc<dyn Fn(&K)>>>,
     invalidated: bool,
     /// Will always be None on the server, hence the SendWrapper is fine:
     gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>,
@@ -160,7 +161,7 @@ impl<K, V> Query<K, V> {
         client_options: QueryOptions,
         scope_lookup: ScopeLookup,
         query_scope_info: &QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: QueryScopeQueryInfo<K>,
         key_hash: KeyHash,
         key: MaybeLocal<K>,
         value: MaybeLocal<V>,
@@ -181,6 +182,9 @@ impl<K, V> Query<K, V> {
         let combined_options = options_combine(client_options, scope_options);
         let active_resources =
             active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
+
+        let invalidation_prefix = query_scope_info_for_new_query.invalidation_prefix;
+        let on_invalidation = query_scope_info_for_new_query.on_invalidation;
 
         // Add to the invalidation prefix trie/hierarchy on creation:
         if let Some(invalidation_prefix) = &invalidation_prefix {
@@ -223,7 +227,7 @@ impl<K, V> Query<K, V> {
             let query_scope_info = query_scope_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 let mut scopes = scope_lookup.scopes_mut();
-                let mut cbs = vec![];
+                let mut cbs_scopes = vec![];
                 let result = scope_lookup.with_cached_scope_mut::<K, V, _, _>(
                     &mut scopes,
                     &query_scope_info,
@@ -241,8 +245,8 @@ impl<K, V> Query<K, V> {
                             if let Some(scope) = maybe_scope
                                 && let Some(cached) = scope.get_mut(&key_hash)
                             {
-                                let cb = cached.invalidate(QueryAbortReason::Invalidate);
-                                cbs.push(cb);
+                                let cb_scopes = cached.invalidate(QueryAbortReason::Invalidate);
+                                cbs_scopes.push(cb_scopes);
                                 #[cfg(any(
                                     all(debug_assertions, feature = "devtools"),
                                     feature = "devtools-always"
@@ -259,8 +263,15 @@ impl<K, V> Query<K, V> {
                         }
                     },
                 );
-                for cb in cbs {
-                    cb(&mut scopes);
+                let mut cbs_external = vec![];
+                for cb in cbs_scopes {
+                    if let Some(cb_external) = cb(&mut scopes) {
+                        cbs_external.push(cb_external);
+                    }
+                }
+                drop(scopes);
+                for cb in cbs_external {
+                    cb();
                 }
                 result
             })
@@ -285,6 +296,7 @@ impl<K, V> Query<K, V> {
             combined_options,
             updated_at: created_at,
             invalidation_prefix,
+            on_invalidation,
             invalidated: false,
             gc_cb,
             refetch_cb,
@@ -346,10 +358,13 @@ impl<K, V> Query<K, V> {
     pub fn invalidate(
         &mut self,
         invalidation_type: QueryAbortReason,
-    ) -> impl FnOnce(&mut Scopes) + 'static + use<K, V> {
+    ) -> impl FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>> + 'static + use<K, V>
+    where
+        K: Clone + 'static,
+    {
         let mut invalidation_map = HashMap::new();
 
-        if !self.invalidated {
+        let maybe_on_invalidation_cb = if !self.invalidated {
             self.invalidated = true;
             // To re-trigger all active resources automatically on manual invalidation:
             self.buster.set(new_buster_id());
@@ -378,7 +393,16 @@ impl<K, V> Query<K, V> {
                     crate::events::EventVariant::Invalidated,
                 ));
             }
-        }
+
+            if let Some(on_invalidation) = self.on_invalidation.clone() {
+                let key = (*self.key.value_may_panic()).clone();
+                Some(Box::new(move || on_invalidation.value_may_panic()(&key)) as Box<dyn FnOnce()>)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Invalidate any in-flight fetch if there is one:
         if let Some(invalidate_tx) = self.query_abort_tx.take() {
@@ -386,17 +410,35 @@ impl<K, V> Query<K, V> {
         }
 
         move |scopes| {
+            let mut cbs_external = vec![];
+
+            if let Some(on_invalidation) = maybe_on_invalidation_cb {
+                cbs_external.push(on_invalidation);
+            }
+
             if !invalidation_map.is_empty() {
-                let mut cbs = vec![];
+                let mut cbs_scopes = vec![];
                 for (cache_key, key_hashes) in invalidation_map {
                     if let Some(scope) = scopes.get_mut(&cache_key) {
-                        let cb = scope.invalidate_queries(key_hashes, invalidation_type);
-                        cbs.push(cb);
+                        let cb_scopes = scope.invalidate_queries(key_hashes, invalidation_type);
+                        cbs_scopes.push(cb_scopes);
                     }
                 }
-                for cb in cbs {
-                    cb(scopes);
+                for cb in cbs_scopes {
+                    if let Some(cb_external) = cb(scopes) {
+                        cbs_external.push(cb_external);
+                    }
                 }
+            }
+
+            if cbs_external.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for cb in cbs_external {
+                        cb();
+                    }
+                }))
             }
         }
     }

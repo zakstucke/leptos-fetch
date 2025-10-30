@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::QueryOptions;
+use crate::{QueryOptions, maybe_local::MaybeLocal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeCacheKey(u64);
@@ -75,7 +75,8 @@ macro_rules! define {
         #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
-            invalidation_hierarchy_fn: Option<Arc<dyn Fn(&K) -> Vec<String> + Send + Sync>>,
+            invalidation_hierarchy_fn: Option<Arc<dyn Fn(&K) -> Vec<String> $($impl_fn_generics)*>>,
+            on_invalidation: Vec<Arc<dyn Fn(&K) $($impl_fn_generics)*>>,
             fetcher_type_id: TypeId,
             cache_key: ScopeCacheKey,
             options: QueryOptions,
@@ -122,6 +123,7 @@ macro_rules! define {
                         ))]
                         title: query_scope.title(),
                         invalidation_hierarchy_fn: None,
+                        on_invalidation: vec![],
                         query: Arc::new(move |key| Box::pin(query_scope.query(key))),
                     }
                 }
@@ -172,7 +174,7 @@ macro_rules! define {
                 /// ```
                 pub fn with_invalidation_link<S, I>(
                     mut self,
-                    invalidation_hierarchy_fn: impl Fn(&K) -> I + Send + Sync + 'static
+                    invalidation_hierarchy_fn: impl Fn(&K) -> I + 'static $($impl_fn_generics)*,
                 ) -> Self
                 where
                     I: IntoIterator<Item = S> + 'static $($impl_fn_generics)*,
@@ -181,6 +183,17 @@ macro_rules! define {
                     self.invalidation_hierarchy_fn = Some(Arc::new(move |key| {
                         invalidation_hierarchy_fn(key).into_iter().map(|s| s.into()).collect()
                     }));
+                    self
+                }
+
+                /// Run a callback when a query is invalidated.
+                /// Will only run once when a query is first invalidated,
+                /// and not on repeated invalidations before a refresh/reset.
+                pub fn on_invalidation(
+                    mut self,
+                    on_invalidation_cb: impl Fn(&K) + 'static $($impl_fn_generics)*,
+                ) -> Self {
+                    self.on_invalidation.push(Arc::new(on_invalidation_cb));
                     self
                 }
 
@@ -216,6 +229,9 @@ macro_rules! define {
 
                 fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>>;
 
+                #[allow(unused_parens)]
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>>;
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -248,6 +264,10 @@ macro_rules! define {
                     None
                 }
 
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    None
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -277,6 +297,11 @@ macro_rules! define {
                 }
 
                 fn invalidation_prefix(&self, _key: &()) -> Option<Vec<String>> {
+                    None
+                }
+
+                #[allow(unused_parens)]
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&()) $($impl_fn_generics)*>> {
                     None
                 }
 
@@ -319,6 +344,20 @@ macro_rules! define {
                     }
                 }
 
+                #[allow(unused_parens)]
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    if self.on_invalidation.is_empty() {
+                        None
+                    } else {
+                        let callbacks = self.on_invalidation.clone();
+                        Some(Arc::new(move |key| {
+                            for cb in &callbacks {
+                                cb(key);
+                            }
+                        }))
+                    }
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -358,6 +397,20 @@ macro_rules! define {
                     }
                 }
 
+                #[allow(unused_parens)]
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    if self.on_invalidation.is_empty() {
+                        None
+                    } else {
+                        let callbacks = self.on_invalidation.clone();
+                        Some(Arc::new(move |key| {
+                            for cb in &callbacks {
+                                cb(key);
+                            }
+                        }))
+                    }
+                }
+
                 #[cfg(any(
                     all(debug_assertions, feature = "devtools"),
                     feature = "devtools-always"
@@ -392,6 +445,11 @@ macro_rules! define {
 
                 fn invalidation_prefix(&self, key: &K) -> Option<Vec<String>> {
                     T::invalidation_prefix(self, key)
+                }
+
+                #[allow(unused_parens)]
+                fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K) $($impl_fn_generics)*>> {
+                    T::on_invalidation(self)
                 }
 
                 #[cfg(any(
@@ -434,6 +492,19 @@ where
             .map(|invalidation_hierarchy_fn| invalidation_hierarchy_fn(key))
     }
 
+    fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K)>> {
+        if self.on_invalidation.is_empty() {
+            None
+        } else {
+            let callbacks = self.on_invalidation.clone();
+            Some(Arc::new(move |key| {
+                for cb in &callbacks {
+                    cb(key);
+                }
+            }))
+        }
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -468,6 +539,19 @@ where
         self.invalidation_hierarchy_fn
             .as_ref()
             .map(|invalidation_hierarchy_fn| invalidation_hierarchy_fn(key))
+    }
+
+    fn on_invalidation(&self) -> Option<Arc<dyn Fn(&K)>> {
+        if self.on_invalidation.is_empty() {
+            None
+        } else {
+            let callbacks = self.on_invalidation.clone();
+            Some(Arc::new(move |key| {
+                for cb in &callbacks {
+                    cb(key);
+                }
+            }))
+        }
     }
 
     #[cfg(any(
@@ -511,6 +595,7 @@ impl QueryScopeInfo {
         }
     }
 
+    #[track_caller]
     pub fn new_local<K, V, M>(query_scope: &impl QueryScopeLocalTrait<K, V, M>) -> Self
     where
         K: 'static,
@@ -524,6 +609,44 @@ impl QueryScopeInfo {
                 feature = "devtools-always"
             ))]
             title: query_scope.title(),
+        }
+    }
+}
+
+pub(crate) struct QueryScopeQueryInfo<K> {
+    pub on_invalidation: Option<MaybeLocal<Arc<dyn Fn(&K)>>>,
+    pub invalidation_prefix: Option<Vec<String>>,
+    _key_marker: std::marker::PhantomData<K>,
+}
+
+impl<K> QueryScopeQueryInfo<K>
+where
+    K: 'static,
+{
+    #[track_caller]
+    pub fn new<V, M>(query_scope: &impl QueryScopeTrait<K, V, M>, key: &K) -> Self
+    where
+        K: 'static,
+        V: 'static,
+    {
+        Self {
+            on_invalidation: query_scope
+                .on_invalidation()
+                .map(MaybeLocal::new_invalidation_cb_special),
+            invalidation_prefix: query_scope.invalidation_prefix(key),
+            _key_marker: std::marker::PhantomData,
+        }
+    }
+
+    #[track_caller]
+    pub fn new_local<V, M>(query_scope: &impl QueryScopeLocalTrait<K, V, M>, key: &K) -> Self
+    where
+        V: 'static,
+    {
+        Self {
+            on_invalidation: query_scope.on_invalidation().map(MaybeLocal::new_local),
+            invalidation_prefix: query_scope.invalidation_prefix(key),
+            _key_marker: std::marker::PhantomData,
         }
     }
 }

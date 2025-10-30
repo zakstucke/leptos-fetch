@@ -30,7 +30,9 @@ use crate::{
     maybe_local::MaybeLocal,
     query::Query,
     query_maybe_key::QueryMaybeKey,
-    query_scope::{QueryScopeInfo, QueryScopeLocalTrait, QueryScopeTrait, ScopeCacheKey},
+    query_scope::{
+        QueryScopeInfo, QueryScopeLocalTrait, QueryScopeQueryInfo, QueryScopeTrait, ScopeCacheKey,
+    },
     resource_drop_guard::ResourceDropGuard,
     utils::{KeyHash, OwnerChain, ResetInvalidated, new_buster_id, new_resource_id},
 };
@@ -259,9 +261,6 @@ impl<Codec: 'static> QueryClient<Codec> {
                 let query_scope = query_scope.clone();
                 let query_scope_info = query_scope_info.clone();
                 let maybe_key = keyer().into_maybe_key();
-                let invalidation_prefix = maybe_key
-                    .as_ref()
-                    .and_then(|key| query_scope.invalidation_prefix(key));
                 let drop_guard = drop_guard.clone();
                 if let Some(key) = maybe_key.as_ref() {
                     drop_guard.set_active_key(KeyHash::new(key));
@@ -272,13 +271,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                 let owner_chain = OwnerChain::new(Owner::current());
                 async move {
                     if let Some(key) = maybe_key {
+                        let query_scope_query_info =
+                            || QueryScopeQueryInfo::new_local(&query_scope, &key);
                         let value = scope_lookup
                             .cached_or_fetch(
                                 client_options,
                                 query_options,
                                 None,
                                 &query_scope_info,
-                                invalidation_prefix,
+                                query_scope_query_info,
                                 &key,
                                 {
                                     let query_scope = query_scope.clone();
@@ -303,9 +304,13 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                     client
                                                         .prefetch_inner(
                                                             QueryScopeInfo::new_local(&query_scope),
-                                                            query_scope
-                                                                .invalidation_prefix(key.borrow()),
-                                                            async move |key| {
+                                                            || {
+                                                                QueryScopeQueryInfo::new_local(
+                                                                    &query_scope,
+                                                                    &key,
+                                                                )
+                                                            },
+                                                            async |key| {
                                                                 MaybeLocal::new_local(
                                                                     query_scope.query(key).await,
                                                                 )
@@ -533,9 +538,6 @@ impl<Codec: 'static> QueryClient<Codec> {
                 move |(maybe_key, last_used_buster)| {
                     let query_scope = query_scope.clone();
                     let query_scope_info = query_scope_info.clone();
-                    let invalidation_prefix = maybe_key
-                        .as_ref()
-                        .and_then(|key| query_scope.invalidation_prefix(key));
                     let buster_if_uncached = buster_if_uncached.clone();
                     let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
                     // Note: cannot hoist outside of resource,
@@ -544,13 +546,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                     let owner_chain = OwnerChain::new(Owner::current());
                     async move {
                         if let Some(key) = maybe_key {
+                            let query_scope_query_info =
+                                || QueryScopeQueryInfo::new(&query_scope, &key);
                             let value = scope_lookup
                                 .cached_or_fetch(
                                     client_options,
                                     query_options,
                                     Some(buster_if_uncached.clone()),
                                     &query_scope_info,
-                                    invalidation_prefix,
+                                    query_scope_query_info,
                                     &key,
                                     {
                                         let query_scope = query_scope.clone();
@@ -569,19 +573,27 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                     let key = key.clone();
                                                     let query_scope = query_scope.clone();
                                                     let owner_chain = owner_chain.clone();
+
                                                     leptos::task::spawn(async move {
                                                         client
                                                             .prefetch_inner(
                                                                 QueryScopeInfo::new(&query_scope),
-                                                                query_scope.invalidation_prefix(
-                                                                    key.borrow(),
-                                                                ),
-                                                                async move |key| {
-                                                                    MaybeLocal::new(
-                                                                        query_scope
-                                                                            .query(key)
-                                                                            .await,
+                                                                || {
+                                                                    QueryScopeQueryInfo::new(
+                                                                        &query_scope,
+                                                                        &key,
                                                                     )
+                                                                },
+                                                                {
+                                                                    let query_scope =
+                                                                        query_scope.clone();
+                                                                    async move |key| {
+                                                                        MaybeLocal::new(
+                                                                            query_scope
+                                                                                .query(key)
+                                                                                .await,
+                                                                        )
+                                                                    }
                                                                 },
                                                                 key.borrow(),
                                                                 || {
@@ -654,6 +666,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                             |maybe_scope, _| {
                                 let scope = maybe_scope.expect("provided a default");
                                 if let Some(key) = keyer().into_maybe_key() {
+                                    let query_scope_query_info = || QueryScopeQueryInfo::new(&query_scope, &key);
                                     let key_hash = KeyHash::new(&key);
 
                                     // Had a bug in tests where:
@@ -681,8 +694,6 @@ impl<Codec: 'static> QueryClient<Codec> {
                                         guard.insert(key, ());
                                     }
 
-                                    let invalidation_prefix = query_scope.invalidation_prefix(&key);
-
                                     let mut was_pending = false;
                                     // Protect against race condition: cancel any frontend query that started already if there was a client side 
                                     // local resource or prefetch/fetch_query etc that started on the initial client-side ticks:
@@ -697,7 +708,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                             client_options,
                                             scope_lookup,
                                             &query_scope_info,
-                                            invalidation_prefix,
+                                            query_scope_query_info(),
                                             key_hash,
                                             MaybeLocal::new(key),
                                             MaybeLocal::new(MaybeKey::mapped_to_maybe_value(val.clone()).expect("Just checked MaybeKey::mapped_value_is_some() is true")),
@@ -784,8 +795,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.prefetch_inner(
             QueryScopeInfo::new(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new(key.borrow().clone()),
             &OwnerChain::new(Owner::current()),
@@ -811,8 +822,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.prefetch_inner(
             QueryScopeInfo::new_local(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new_local(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new_local(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new_local(key.borrow().clone()),
             &OwnerChain::new(Owner::current()),
@@ -824,7 +835,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     async fn prefetch_inner<K, V>(
         &self,
         query_scope_info: QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
         fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         key: &K,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
@@ -839,7 +850,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 query_scope_info.options,
                 None,
                 &query_scope_info,
-                invalidation_prefix,
+                query_scope_info_for_new_query,
                 key,
                 fetcher,
                 |info| {
@@ -885,8 +896,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.fetch_inner(
             QueryScopeInfo::new(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new(query_scope.query(key).await),
             key.borrow(),
             None,
             || MaybeLocal::new(key.borrow().clone()),
@@ -916,8 +927,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.fetch_inner(
             QueryScopeInfo::new_local(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new_local(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new_local(query_scope.query(key).await),
             key.borrow(),
             None,
             || MaybeLocal::new_local(key.borrow().clone()),
@@ -930,7 +941,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     async fn fetch_inner<K, V>(
         &self,
         query_scope_info: QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
         fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         key: &K,
         maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
@@ -947,7 +958,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 query_scope_info.options,
                 None,
                 &query_scope_info,
-                invalidation_prefix,
+                query_scope_info_for_new_query,
                 key,
                 fetcher,
                 |info| {
@@ -991,7 +1002,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.set_inner(
             QueryScopeInfo::new(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
+            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
             key.borrow(),
             MaybeLocal::new(new_value),
             || MaybeLocal::new(key.borrow().clone()),
@@ -1018,7 +1029,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.set_inner::<K, V>(
             QueryScopeInfo::new_local(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
+            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
             key.borrow(),
             MaybeLocal::new_local(new_value),
             || MaybeLocal::new_local(key.borrow().clone()),
@@ -1033,7 +1044,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     fn set_inner<K, V>(
         &self,
         query_scope_info: QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
         key: &K,
         new_value: MaybeLocal<V>,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
@@ -1079,7 +1090,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                         self.options(),
                         self.scope_lookup,
                         &query_scope_info,
-                        invalidation_prefix,
+                        query_scope_info_for_new_query(),
                         key_hash,
                         lazy_maybe_local_key(),
                         new_value,
@@ -1204,8 +1215,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.update_query_async_inner(
             QueryScopeInfo::new(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new(query_scope.query(key).await),
             key.borrow(),
             mapper,
             MaybeLocal::new,
@@ -1238,8 +1249,8 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         self.update_query_async_inner(
             QueryScopeInfo::new_local(&query_scope),
-            query_scope.invalidation_prefix(key.borrow()),
-            async move |key| MaybeLocal::new_local(query_scope.query(key).await),
+            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new_local(query_scope.query(key).await),
             key.borrow(),
             mapper,
             MaybeLocal::new_local,
@@ -1253,7 +1264,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     async fn update_query_async_inner<'a, K, V, T>(
         &'a self,
         query_scope_info: QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
         fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         key: &K,
         mapper: impl AsyncFnOnce(&mut V) -> T,
@@ -1276,7 +1287,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         let mut new_value = self
             .fetch_inner(
                 query_scope_info.clone(),
-                invalidation_prefix.clone(),
+                &query_scope_info_for_new_query,
                 fetcher,
                 key.borrow(),
                 Some(&fetcher_guard),
@@ -1354,7 +1365,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                     if !updated {
                         self.set_inner::<K, V>(
                             query_scope_info,
-                            invalidation_prefix,
+                            query_scope_info_for_new_query,
                             key.borrow(),
                             into_maybe_local(
                                 new_value
@@ -1382,7 +1393,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: impl Borrow<K>,
     ) -> Option<V>
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scope_lookup.with_cached_query::<K, V, _>(
@@ -1405,7 +1416,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let key_hash = KeyHash::new(key.borrow());
@@ -1662,7 +1673,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> Signal<Option<V>>
     where
-        K: DebugIfDevtoolsEnabled + Hash + Send + Sync + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + Send + Sync + 'static,
         MaybeKey: QueryMaybeKey<K, V>,
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
@@ -1684,7 +1695,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keyer: impl Fn() -> MaybeKey + 'static,
     ) -> Signal<Option<V>, LocalStorage>
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         MaybeKey: QueryMaybeKey<K, V>,
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
@@ -1706,7 +1717,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keyer: impl Fn() -> MaybeKey + 'static,
     ) -> ArcLocalSignal<Option<V>>
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         MaybeKey: QueryMaybeKey<K, V>,
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
@@ -1754,7 +1765,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keyer: impl Fn() -> MaybeKey + Send + Sync + 'static,
     ) -> ArcSignal<Option<V>>
     where
-        K: DebugIfDevtoolsEnabled + Hash + Send + Sync + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + Send + Sync + 'static,
         MaybeKey: QueryMaybeKey<K, V>,
         MaybeKey::MappedValue: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
@@ -1797,7 +1808,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let cleared = self.invalidate_queries(query_scope, std::iter::once(key));
@@ -1814,7 +1825,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keys: impl IntoIterator<Item = KRef>,
     ) -> Vec<KRef>
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
         KRef: Borrow<K>,
     {
@@ -1833,11 +1844,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
         should_invalidate: impl Fn(&K) -> bool,
     ) where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &mut scopes,
             &QueryScopeInfo::new_local(&query_scope),
@@ -1849,15 +1860,22 @@ impl<Codec: 'static> QueryClient<Codec> {
                         if let Some(key) = query.key().value_if_safe()
                             && should_invalidate(key)
                         {
-                            let cb = query.invalidate(QueryAbortReason::Invalidate);
-                            cbs.push(cb);
+                            let cb_scopes = query.invalidate(QueryAbortReason::Invalidate);
+                            cbs_scopes.push(cb_scopes);
                         }
                     }
                 }
             },
         );
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
     }
 
@@ -1868,7 +1886,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         keys: impl IntoIterator<Item = KRef>,
     ) -> Vec<KRef>
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
         KRef: Borrow<K>,
     {
@@ -1883,7 +1901,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         }
 
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         let results = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &mut scopes,
             query_scope_info,
@@ -1894,8 +1912,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     for (key, key_hash) in keys.into_iter().zip(key_hashes.iter()) {
                         if let Some(cached) = scope.get_mut_include_pending(key_hash) {
-                            let cb = cached.invalidate(QueryAbortReason::Invalidate);
-                            cbs.push(cb);
+                            let cb_scopes = cached.invalidate(QueryAbortReason::Invalidate);
+                            cbs_scopes.push(cb_scopes);
                             invalidated.push(key);
                         }
                     }
@@ -1903,8 +1921,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                 invalidated
             },
         );
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
         results
     }
@@ -1923,16 +1948,23 @@ impl<Codec: 'static> QueryClient<Codec> {
 
     pub(crate) fn invalidate_query_scope_inner(&self, scope_cache_key: &ScopeCacheKey) {
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         if let Some(scope) = scopes.get_mut(scope_cache_key) {
-            let cb = scope.invalidate_scope(QueryAbortReason::Invalidate);
-            cbs.push(cb);
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs_scopes.push(cb_scopes);
             for buster in scope.busters() {
                 buster.try_set(new_buster_id());
             }
         }
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
     }
 
@@ -1945,17 +1977,24 @@ impl<Codec: 'static> QueryClient<Codec> {
     #[track_caller]
     pub fn invalidate_all_queries(&self) {
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         for scope in scopes.values_mut() {
             let busters = scope.busters();
-            let cb = scope.invalidate_scope(QueryAbortReason::Invalidate);
-            cbs.push(cb);
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs_scopes.push(cb_scopes);
             for buster in busters {
                 buster.try_set(new_buster_id());
             }
         }
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
     }
 
@@ -1970,18 +2009,25 @@ impl<Codec: 'static> QueryClient<Codec> {
     #[track_caller]
     pub fn clear(&self) {
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         for scope in scopes.values_mut() {
             let busters = scope.busters();
-            let cb = scope.invalidate_scope(QueryAbortReason::Clear);
-            cbs.push(cb);
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Clear);
+            cbs_scopes.push(cb_scopes);
             scope.clear();
             for buster in busters {
                 buster.try_set(new_buster_id());
             }
         }
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
     }
 
@@ -1994,11 +2040,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs = vec![];
+        let mut cbs_scopes = vec![];
         let result = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &mut scopes,
             &QueryScopeInfo::new_local(&query_scope),
@@ -2008,8 +2054,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     let key_hash = KeyHash::new(key.borrow());
                     if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
-                        let cb = cached.invalidate(QueryAbortReason::Clear);
-                        cbs.push(cb);
+                        let cb_scopes = cached.invalidate(QueryAbortReason::Clear);
+                        cbs_scopes.push(cb_scopes);
                     }
                     let removed = scope.remove_entry(&key_hash);
                     // Calling it again just in case because in tests might be in sync cache and non sync cache:
@@ -2019,8 +2065,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                 false
             },
         );
-        for cb in cbs {
-            cb(&mut scopes);
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        for cb in cbs_external {
+            cb();
         }
         result
     }
@@ -2041,7 +2094,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         key: impl Borrow<K>,
     ) -> bool
     where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
@@ -2069,7 +2122,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         query_scope: impl QueryScopeLocalTrait<K, V, M>,
         key: impl Borrow<K>,
     ) where
-        K: DebugIfDevtoolsEnabled + Hash + 'static,
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(

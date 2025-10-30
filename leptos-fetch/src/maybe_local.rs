@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
 use send_wrapper::SendWrapper;
@@ -67,6 +68,13 @@ where
     /// Create a new threadsafe value.
     pub fn new(value: V) -> Self {
         Self(Inner::Threadsafe(value))
+    }
+}
+
+impl<K> MaybeLocal<Arc<dyn Fn(&K)>> {
+    /// Just fixes an annoying specific usecase in QueryScopeQueryInfo::new
+    pub fn new_invalidation_cb_special(cb: Arc<dyn Fn(&K) + Send + Sync>) -> Self {
+        Self(Inner::Threadsafe(cb))
     }
 }
 

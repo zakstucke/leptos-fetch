@@ -10,12 +10,12 @@ use crate::{
 #[derive(Clone)]
 pub struct ResourceDropGuard<K, V>(Arc<Mutex<ResourceDropGuardInner<K, V>>>)
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: 'static;
 
 impl<K, V> ResourceDropGuard<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: 'static,
 {
     pub fn new(scope_lookup: ScopeLookup, resource_id: u64, cache_key: ScopeCacheKey) -> Self {
@@ -47,7 +47,7 @@ where
 
 struct ResourceDropGuardInner<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: 'static,
 {
     scope_lookup: ScopeLookup,
@@ -60,7 +60,7 @@ where
 
 impl<K, V> Drop for ResourceDropGuardInner<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: 'static,
 {
     fn drop(&mut self) {
