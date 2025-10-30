@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Replaced spawn during invalidation with internal callbacks. ([#56](https://github.com/zakstucke/leptos-fetch/pull/56))
+
 ---
 
 ## [0.4.7](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.7)

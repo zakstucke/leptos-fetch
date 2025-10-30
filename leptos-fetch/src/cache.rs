@@ -23,7 +23,10 @@ use crate::{
 };
 
 pub(crate) trait Busters: 'static {
-    fn invalidate_scope(&mut self, invalidation_type: QueryAbortReason);
+    fn invalidate_scope(
+        &mut self,
+        invalidation_type: QueryAbortReason,
+    ) -> Box<dyn FnOnce(&mut Scopes)>;
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
@@ -33,10 +36,20 @@ where
     K: DebugIfDevtoolsEnabled + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
-    fn invalidate_scope(&mut self, invalidation_type: QueryAbortReason) {
+    fn invalidate_scope(
+        &mut self,
+        invalidation_type: QueryAbortReason,
+    ) -> Box<dyn FnOnce(&mut Scopes)> {
+        let mut cbs = vec![];
         for query in self.all_queries_mut_include_pending() {
-            query.invalidate(invalidation_type);
+            let cb = query.invalidate(invalidation_type);
+            cbs.push(cb);
         }
+        Box::new(move |scopes| {
+            for cb in cbs {
+                cb(scopes);
+            }
+        })
     }
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>> {
@@ -60,7 +73,11 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         feature = "devtools-always"
     ))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery>;
-    fn invalidate_queries(&mut self, key_hashes: Vec<KeyHash>, invalidation_type: QueryAbortReason);
+    fn invalidate_queries(
+        &mut self,
+        key_hashes: Vec<KeyHash>,
+        invalidation_type: QueryAbortReason,
+    ) -> Box<dyn FnOnce(&mut Scopes)>;
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -110,12 +127,19 @@ where
         &mut self,
         key_hashes: Vec<KeyHash>,
         invalidation_type: QueryAbortReason,
-    ) {
+    ) -> Box<dyn FnOnce(&mut Scopes)> {
+        let mut cbs = vec![];
         for key_hash in key_hashes {
             if let Some(query) = self.get_mut(&key_hash) {
-                query.invalidate(invalidation_type);
+                let cb = query.invalidate(invalidation_type);
+                cbs.push(cb);
             }
         }
+        Box::new(move |scopes| {
+            for cb in cbs {
+                cb(scopes);
+            }
+        })
     }
 
     #[cfg(any(
@@ -361,6 +385,7 @@ impl ScopeLookup {
 
     pub fn with_cached_scope_mut<K, V, T, P>(
         &self,
+        scopes: &mut Scopes,
         query_scope_info: &QueryScopeInfo,
         create_scope_if_missing: bool,
         mut scopes_prehook: impl FnMut(&mut Scopes) -> P,
@@ -370,8 +395,7 @@ impl ScopeLookup {
         K: DebugIfDevtoolsEnabled + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let mut scopes = self.scopes_mut();
-        let prehook_result = scopes_prehook(&mut scopes);
+        let prehook_result = scopes_prehook(scopes);
         let maybe_scope = match scopes.entry(query_scope_info.cache_key) {
             Entry::Occupied(entry) => Some(entry.into_mut()),
             Entry::Vacant(entry) => {
@@ -435,6 +459,7 @@ impl ScopeLookup {
         let (query_abort_tx, query_abort_rx) =
             futures::channel::oneshot::channel::<QueryAbortReason>();
         self.with_cached_scope_mut::<K, V, _, _>(
+            &mut self.scopes_mut(),
             query_scope_info,
             true,
             |_| {},
@@ -618,6 +643,7 @@ impl ScopeLookup {
                 };
 
                 let next_directive = self.with_cached_scope_mut::<_, _, _, _>(
+                    &mut self.scopes_mut(),
                     query_scope_info,
                     true,
                     |_| {},

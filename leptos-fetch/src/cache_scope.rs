@@ -1,8 +1,12 @@
 use std::{collections::HashMap, sync::Arc, thread::ThreadId};
 
 use crate::{
-    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, maybe_local::MaybeLocal,
-    query::Query, query_scope::QueryScopeInfo, utils::KeyHash,
+    cache::{ScopeLookup, Scopes},
+    debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
+    maybe_local::MaybeLocal,
+    query::Query,
+    query_scope::QueryScopeInfo,
+    utils::KeyHash,
 };
 
 #[derive(Debug)]
@@ -51,7 +55,11 @@ impl<K, V> QueryOrPending<K, V> {
         }
     }
 
-    pub fn invalidate(&mut self, invalidation_type: QueryAbortReason) {
+    pub fn invalidate(
+        &mut self,
+        invalidation_type: QueryAbortReason,
+    ) -> impl FnOnce(&mut Scopes) + 'static + use<K, V> {
+        let mut inner_cb = None;
         match self {
             QueryOrPending::Pending { query_abort_tx, .. } => {
                 // Invalidate any in-flight fetch if there is still one:
@@ -59,7 +67,14 @@ impl<K, V> QueryOrPending<K, V> {
                     let _ = query_abort_tx.send(invalidation_type);
                 }
             }
-            QueryOrPending::Query(query) => query.invalidate(invalidation_type),
+            QueryOrPending::Query(query) => {
+                inner_cb = Some(query.invalidate(invalidation_type));
+            }
+        }
+        move |scopes| {
+            if let Some(cb) = inner_cb {
+                cb(scopes);
+            }
         }
     }
 

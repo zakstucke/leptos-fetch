@@ -11,7 +11,7 @@ use send_wrapper::SendWrapper;
 
 use crate::{
     QueryOptions, SYNC_TRACK_UPDATE_MARKER,
-    cache::ScopeLookup,
+    cache::{ScopeLookup, Scopes},
     cache_scope::QueryAbortReason,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
@@ -222,7 +222,10 @@ impl<K, V> Query<K, V> {
             // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
             let query_scope_info = query_scope_info.clone();
             Some(Arc::new(SendWrapper::new(Box::new(move || {
-                scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+                let mut scopes = scope_lookup.scopes_mut();
+                let mut cbs = vec![];
+                let result = scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+                    &mut scopes,
                     &query_scope_info,
                     false,
                     |scopes| {
@@ -238,7 +241,8 @@ impl<K, V> Query<K, V> {
                             if let Some(scope) = maybe_scope
                                 && let Some(cached) = scope.get_mut(&key_hash)
                             {
-                                cached.invalidate(QueryAbortReason::Invalidate);
+                                let cb = cached.invalidate(QueryAbortReason::Invalidate);
+                                cbs.push(cb);
                                 #[cfg(any(
                                     all(debug_assertions, feature = "devtools"),
                                     feature = "devtools-always"
@@ -254,7 +258,11 @@ impl<K, V> Query<K, V> {
                             RefetchCbResult::PostponedWhilstRefetchDisabled
                         }
                     },
-                )
+                );
+                for cb in cbs {
+                    cb(&mut scopes);
+                }
+                result
             })
                 as Box<dyn Fn() -> RefetchCbResult>)))
         } else {
@@ -335,7 +343,12 @@ impl<K, V> Query<K, V> {
         let _ = total_active;
     }
 
-    pub fn invalidate(&mut self, invalidation_type: QueryAbortReason) {
+    pub fn invalidate(
+        &mut self,
+        invalidation_type: QueryAbortReason,
+    ) -> impl FnOnce(&mut Scopes) + 'static + use<K, V> {
+        let mut invalidation_map = HashMap::new();
+
         if !self.invalidated {
             self.invalidated = true;
             // To re-trigger all active resources automatically on manual invalidation:
@@ -344,7 +357,6 @@ impl<K, V> Query<K, V> {
             // Invalidate any linked children through the invalidation prefix trie/hierarchy on creation:
             if let Some(invalidation_prefix) = &self.invalidation_prefix {
                 let trie = self.scope_lookup.invalidation_trie();
-                let mut invalidation_map = HashMap::new();
                 for (cache_key, key_hash) in trie.find_with_prefix(invalidation_prefix) {
                     if cache_key == &self.cache_key && *key_hash == self.key_hash {
                         continue;
@@ -354,18 +366,6 @@ impl<K, V> Query<K, V> {
                         .entry(*cache_key)
                         .or_insert_with(Vec::new)
                         .push(*key_hash);
-                }
-                if !invalidation_map.is_empty() {
-                    // Not ideal having to spawn, but need to get access to the global lock we'll already be holding in this .invalidate() fn:
-                    let scope_lookup = self.scope_lookup;
-                    leptos::task::spawn(async move {
-                        let mut scopes = scope_lookup.scopes_mut();
-                        for (cache_key, key_hashes) in invalidation_map {
-                            if let Some(scope) = scopes.get_mut(&cache_key) {
-                                scope.invalidate_queries(key_hashes, invalidation_type);
-                            }
-                        }
-                    });
                 }
             }
 
@@ -379,9 +379,25 @@ impl<K, V> Query<K, V> {
                 ));
             }
         }
+
         // Invalidate any in-flight fetch if there is one:
         if let Some(invalidate_tx) = self.query_abort_tx.take() {
             let _ = invalidate_tx.send(invalidation_type);
+        }
+
+        move |scopes| {
+            if !invalidation_map.is_empty() {
+                let mut cbs = vec![];
+                for (cache_key, key_hashes) in invalidation_map {
+                    if let Some(scope) = scopes.get_mut(&cache_key) {
+                        let cb = scope.invalidate_queries(key_hashes, invalidation_type);
+                        cbs.push(cb);
+                    }
+                }
+                for cb in cbs {
+                    cb(scopes);
+                }
+            }
         }
     }
 

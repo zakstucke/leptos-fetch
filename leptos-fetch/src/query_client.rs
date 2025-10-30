@@ -647,6 +647,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(val) = resource.read().as_ref() {
                     if MaybeKey::mapped_value_is_some(val) {
                         scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+                            &mut scope_lookup.scopes_mut(),
                             &query_scope_info,
                             true,
                             |_| {},
@@ -1044,6 +1045,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         let key_hash = KeyHash::new(key.borrow());
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut self.scope_lookup.scopes_mut(),
             &query_scope_info,
             true,
             |_| {},
@@ -1143,6 +1145,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         let mut modifier_holder = Some(modifier);
 
         let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut self.scope_lookup.scopes_mut(),
             query_scope_info,
             false,
             |_| {},
@@ -1833,7 +1836,10 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut scopes,
             &QueryScopeInfo::new_local(&query_scope),
             false,
             |_| {},
@@ -1843,12 +1849,16 @@ impl<Codec: 'static> QueryClient<Codec> {
                         if let Some(key) = query.key().value_if_safe()
                             && should_invalidate(key)
                         {
-                            query.invalidate(QueryAbortReason::Invalidate);
+                            let cb = query.invalidate(QueryAbortReason::Invalidate);
+                            cbs.push(cb);
                         }
                     }
                 }
             },
-        )
+        );
+        for cb in cbs {
+            cb(&mut scopes);
+        }
     }
 
     #[track_caller]
@@ -1872,7 +1882,10 @@ impl<Codec: 'static> QueryClient<Codec> {
             return vec![];
         }
 
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
+        let results = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut scopes,
             query_scope_info,
             false,
             |_| {},
@@ -1881,14 +1894,19 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     for (key, key_hash) in keys.into_iter().zip(key_hashes.iter()) {
                         if let Some(cached) = scope.get_mut_include_pending(key_hash) {
-                            cached.invalidate(QueryAbortReason::Invalidate);
+                            let cb = cached.invalidate(QueryAbortReason::Invalidate);
+                            cbs.push(cb);
                             invalidated.push(key);
                         }
                     }
                 }
                 invalidated
             },
-        )
+        );
+        for cb in cbs {
+            cb(&mut scopes);
+        }
+        results
     }
 
     /// Mark all queries of a specific type as stale.
@@ -1904,12 +1922,17 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     pub(crate) fn invalidate_query_scope_inner(&self, scope_cache_key: &ScopeCacheKey) {
-        let mut guard = self.scope_lookup.scopes_mut();
-        if let Some(scope) = guard.get_mut(scope_cache_key) {
-            scope.invalidate_scope(QueryAbortReason::Invalidate);
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
+        if let Some(scope) = scopes.get_mut(scope_cache_key) {
+            let cb = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs.push(cb);
             for buster in scope.busters() {
                 buster.try_set(new_buster_id());
             }
+        }
+        for cb in cbs {
+            cb(&mut scopes);
         }
     }
 
@@ -1921,12 +1944,18 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// see [`QueryClient::clear`].
     #[track_caller]
     pub fn invalidate_all_queries(&self) {
-        for scope in self.scope_lookup.scopes_mut().values_mut() {
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
+        for scope in scopes.values_mut() {
             let busters = scope.busters();
-            scope.invalidate_scope(QueryAbortReason::Invalidate);
+            let cb = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs.push(cb);
             for buster in busters {
                 buster.try_set(new_buster_id());
             }
+        }
+        for cb in cbs {
+            cb(&mut scopes);
         }
     }
 
@@ -1940,13 +1969,19 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// [`QueryClient::invalidate_all_queries`] on the other hand, will only refetch active queries in the background, replacing them when ready.
     #[track_caller]
     pub fn clear(&self) {
-        for scope in self.scope_lookup.scopes_mut().values_mut() {
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
+        for scope in scopes.values_mut() {
             let busters = scope.busters();
-            scope.invalidate_scope(QueryAbortReason::Clear);
+            let cb = scope.invalidate_scope(QueryAbortReason::Clear);
+            cbs.push(cb);
             scope.clear();
             for buster in busters {
                 buster.try_set(new_buster_id());
             }
+        }
+        for cb in cbs {
+            cb(&mut scopes);
         }
     }
 
@@ -1962,7 +1997,10 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut cbs = vec![];
+        let result = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut scopes,
             &QueryScopeInfo::new_local(&query_scope),
             false,
             |_| {},
@@ -1970,7 +2008,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(scope) = maybe_scope {
                     let key_hash = KeyHash::new(key.borrow());
                     if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
-                        cached.invalidate(QueryAbortReason::Clear);
+                        let cb = cached.invalidate(QueryAbortReason::Clear);
+                        cbs.push(cb);
                     }
                     let removed = scope.remove_entry(&key_hash);
                     // Calling it again just in case because in tests might be in sync cache and non sync cache:
@@ -1979,7 +2018,11 @@ impl<Codec: 'static> QueryClient<Codec> {
                 }
                 false
             },
-        )
+        );
+        for cb in cbs {
+            cb(&mut scopes);
+        }
+        result
     }
 
     #[cfg(test)]
@@ -2002,6 +2045,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut self.scope_lookup.scopes_mut(),
             &QueryScopeInfo::new_local(&query_scope),
             false,
             |_| {},
@@ -2029,6 +2073,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
+            &mut self.scope_lookup.scopes_mut(),
             &QueryScopeInfo::new_local(&query_scope),
             false,
             |_| {},
