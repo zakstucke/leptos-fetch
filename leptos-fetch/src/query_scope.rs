@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{maybe_local::MaybeLocal, QueryOptions};
+use crate::{QueryOptions, maybe_local::MaybeLocal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeCacheKey(u64);
