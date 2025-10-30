@@ -100,13 +100,14 @@ pub struct QueryRep {
     pub events: ArcSignal<Vec<Event>>,
 }
 
-pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
+pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
     let cache_rep = CacheRep::default();
     if cfg!(not(feature = "ssr")) {
         let add_query = {
             let cache_rep = cache_rep.clone();
             move |query_info: QueryCreatedInfo| {
-                let mut scope_subscriptions_mut = client.scope_lookup.scope_subscriptions_mut();
+                let mut scope_subscriptions_mut =
+                    client.untyped_client.scope_lookup.scope_subscriptions_mut();
 
                 let value_set_updated_or_removed_signal = scope_subscriptions_mut
                     .add_value_set_updated_or_removed_subscription(
@@ -121,8 +122,11 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                     ArcSignal::derive(move || {
                         // Will be None when the query has been gc'd:
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) =
-                                client.scope_lookup.scopes().get(&query_info.cache_key)
+                            && let Some(scope) = client
+                                .untyped_client
+                                .scope_lookup
+                                .scopes()
+                                .get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
                             // So is_gced isn't true during the initial period where the query hasn't finished fetching yet:
@@ -158,8 +162,11 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
                         // Events are the only subscription that updates on invalidated:
                         events.track();
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) =
-                                client.scope_lookup.scopes().get(&query_info.cache_key)
+                            && let Some(scope) = client
+                                .untyped_client
+                                .scope_lookup
+                                .scopes()
+                                .get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
                             return dyn_query.is_invalidated();
@@ -194,8 +201,11 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
 
                         // Will be None when the query has been gc'd:
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) =
-                                client.scope_lookup.scopes().get(&query_info.cache_key)
+                            && let Some(scope) = client
+                                .untyped_client
+                                .scope_lookup
+                                .scopes()
+                                .get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
                             if let Some(till_stale) = dyn_query.till_stale() {
@@ -263,6 +273,7 @@ pub fn prepare<Codec>(client: QueryClient<Codec>) -> CacheRep {
         };
 
         let mut sub_query_created = client
+            .untyped_client
             .scope_lookup
             .client_subscriptions_mut()
             .add_query_created_subscription(true);

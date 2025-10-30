@@ -5,7 +5,24 @@ use std::{
 
 use leptos::prelude::{Owner, ScopedFuture, TimeoutHandle, untrack};
 
-use crate::no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture;
+use crate::{UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture};
+
+// The context which on_gc, on_invalidation etc should run in.
+pub(crate) fn run_external_callbacks(
+    untyped_client: UntypedQueryClient,
+    callbacks: Vec<Box<dyn FnOnce()>>,
+) {
+    let owner = match Owner::current() {
+        Some(o) => o.child(),
+        None => Owner::default(),
+    };
+    owner.with(|| {
+        leptos::context::provide_context(untyped_client);
+        for cb in callbacks {
+            cb();
+        }
+    })
+}
 
 macro_rules! defined_id_gen {
     ($name:ident) => {
@@ -131,9 +148,20 @@ pub(crate) fn safe_set_timeout(
 pub(crate) struct OwnerChain(Arc<Vec<Owner>>);
 
 /// Accepts None to make the method usage usable even when no owner exists.
+/// Will run the query in a fresh child owner.
+/// The owner will contain the context of the current client.
 impl OwnerChain {
-    pub fn new(owner: Option<Owner>) -> Self {
-        let mut owners = vec![];
+    pub fn new(untyped_client: UntypedQueryClient, owner: Option<Owner>) -> Self {
+        let active_owner = match &owner {
+            Some(o) => o.child(),
+            None => Owner::default(),
+        };
+
+        active_owner.with(|| {
+            leptos::context::provide_context(untyped_client);
+        });
+
+        let mut owners = vec![active_owner];
         let mut next_owner = owner;
         while let Some(o) = next_owner {
             next_owner = o.parent();

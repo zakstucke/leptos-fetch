@@ -5,8 +5,8 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- Inbuilt pagination / infinite query support with [`QueryScope::new_paginated_with_cursor`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.new_paginated_with_cursor) and [`QueryScopeLocal::new_paginated_with_cursor`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html#method.new_paginated_with_cursor) ([#55](https://github.com/zakstucke/leptos-fetch/pull/55))
 - User callbacks on query garbage collection with [`QueryScope::on_gc`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.on_gc) and [`QueryScopeLocal::on_gc`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html#method.on_gc) ([#58](https://github.com/zakstucke/leptos-fetch/pull/58))
-
 - User callbacks on query invalidation with [`QueryScope::on_invalidation`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.on_invalidation) and [`QueryScopeLocal::on_invalidation`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html#method.on_invalidation) ([#57](https://github.com/zakstucke/leptos-fetch/pull/57))
 
 ### Fixed

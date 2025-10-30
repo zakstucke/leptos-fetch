@@ -14,7 +14,7 @@ use crate::{
     cache_scope::QueryAbortReason,
     query_scope::ScopeCacheKey,
     safe_dt_dur_add,
-    utils::{KeyHash, new_buster_id, safe_set_timeout},
+    utils::{KeyHash, new_buster_id, run_external_callbacks, safe_set_timeout},
 };
 
 const TIME_FORMAT: &str = "%H:%M:%S.%3f"; // %3f will give millisecond accuracy
@@ -969,7 +969,10 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                 if let Some(query) = query.try_read_value() {
                                     let cache_key = query.cache_key;
                                     let key_hash = query.key_hash;
-                                    let mut scopes = client.scope_lookup.scopes_mut();
+                                    let mut scopes = client
+                                        .untyped_client
+                                        .scope_lookup
+                                        .scopes_mut();
                                     if let Some(scope) = scopes.get_mut(&cache_key) {
                                         let cb_scopes = scope
                                             .invalidate_queries(
@@ -979,7 +982,10 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                         let maybe_cb_external = cb_scopes(&mut scopes);
                                         drop(scopes);
                                         if let Some(cb_external) = maybe_cb_external {
-                                            cb_external();
+                                            run_external_callbacks(
+                                                client.untyped_client,
+                                                vec![cb_external],
+                                            );
                                         }
                                     }
                                 }

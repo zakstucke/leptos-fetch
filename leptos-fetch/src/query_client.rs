@@ -10,7 +10,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use codee::{Decoder, Encoder};
-use futures::pin_mut;
+use futures::{FutureExt, pin_mut};
 use leptos::{
     prelude::{
         ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Owner, Read,
@@ -24,7 +24,7 @@ use send_wrapper::SendWrapper;
 
 use crate::{
     ArcLocalSignal, QueryOptions,
-    cache::{CachedOrFetchCbInputVariant, CachedOrFetchCbOutput},
+    cache::{CachedOrFetchCbInput, CachedOrFetchCbInputVariant, CachedOrFetchCbOutput},
     cache_scope::{QueryAbortReason, QueryOrPending},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
@@ -34,7 +34,10 @@ use crate::{
         QueryScopeInfo, QueryScopeLocalTrait, QueryScopeQueryInfo, QueryScopeTrait, ScopeCacheKey,
     },
     resource_drop_guard::ResourceDropGuard,
-    utils::{KeyHash, OwnerChain, ResetInvalidated, new_buster_id, new_resource_id},
+    utils::{
+        KeyHash, OwnerChain, ResetInvalidated, new_buster_id, new_resource_id,
+        run_external_callbacks,
+    },
 };
 
 use super::cache::ScopeLookup;
@@ -76,17 +79,24 @@ std::thread_local! {
 /// }
 /// ```
 pub struct QueryClient<Codec = DefaultCodec> {
+    pub(crate) untyped_client: UntypedQueryClient,
+    _ser: std::marker::PhantomData<SendWrapper<Codec>>,
+}
+
+/// The internal untyped part of the [`QueryClient`],
+/// containing the methods that don't rely on the Codec generic.
+#[derive(Clone, Copy)]
+pub(crate) struct UntypedQueryClient {
     pub(crate) scope_lookup: ScopeLookup,
     options: QueryOptions,
     created_at: DateTime<Utc>,
-    _ser: std::marker::PhantomData<SendWrapper<Codec>>,
 }
 
 impl<Codec> Debug for QueryClient<Codec> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryClient")
-            .field("scope_lookup", &self.scope_lookup)
-            .field("options", &self.options)
+            .field("scope_lookup", &self.untyped_client.scope_lookup)
+            .field("options", &self.untyped_client.options)
             .field("codec", &std::any::type_name::<Codec>())
             .finish()
     }
@@ -115,9 +125,11 @@ impl QueryClient<DefaultCodec> {
     #[track_caller]
     pub fn new() -> Self {
         Self {
-            scope_lookup: ScopeLookup::new(),
-            options: QueryOptions::default(),
-            created_at: Utc::now(),
+            untyped_client: UntypedQueryClient {
+                scope_lookup: ScopeLookup::new(),
+                options: QueryOptions::default(),
+                created_at: Utc::now(),
+            },
             _ser: std::marker::PhantomData,
         }
     }
@@ -171,9 +183,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     #[track_caller]
     pub fn set_codec<NewCodec>(self) -> QueryClient<NewCodec> {
         QueryClient {
-            scope_lookup: self.scope_lookup,
-            options: self.options,
-            created_at: self.created_at,
+            untyped_client: self.untyped_client,
             _ser: std::marker::PhantomData,
         }
     }
@@ -183,7 +193,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// These options will be combined with any options for a specific query scope.
     #[track_caller]
     pub fn with_options(mut self, options: QueryOptions) -> Self {
-        self.options = options;
+        self.untyped_client.options = options;
         self
     }
 
@@ -192,7 +202,7 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// These will be combined with any options for a specific query scope.
     #[track_caller]
     pub fn options(&self) -> QueryOptions {
-        self.options
+        self.untyped_client.options
     }
 
     /// Provide a signal to globally enable/disable auto refetching of queries
@@ -201,14 +211,21 @@ impl<Codec: 'static> QueryClient<Codec> {
     /// Whilst this signal returns `false`, refetches will be skipped.
     #[track_caller]
     pub fn with_refetch_enabled_toggle(self, refetch_enabled: impl Into<ArcSignal<bool>>) -> Self {
-        self.scope_lookup.scopes_mut().refetch_enabled = Some(refetch_enabled.into());
+        self.untyped_client
+            .scope_lookup
+            .scopes_mut()
+            .refetch_enabled = Some(refetch_enabled.into());
         self
     }
 
     /// If set, access the signal that globally enables/disables auto refetching of queries.
     #[track_caller]
     pub fn refetch_enabled(&self) -> Option<ArcSignal<bool>> {
-        self.scope_lookup.scopes().refetch_enabled.clone()
+        self.untyped_client
+            .scope_lookup
+            .scopes()
+            .refetch_enabled
+            .clone()
     }
 
     /// Query with [`LocalResource`]. Local resouces only load data on the client, so can be used with non-threadsafe/serializable data.
@@ -246,7 +263,6 @@ impl<Codec: 'static> QueryClient<Codec> {
     {
         let client = *self;
         let client_options = self.options();
-        let scope_lookup = self.scope_lookup;
         let cache_key = query_scope.cache_key();
         let query_scope_info = QueryScopeInfo::new_local(&query_scope);
         let query_scope = Arc::new(query_scope);
@@ -254,7 +270,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         let resource_id = new_resource_id();
 
         // To call .mark_resource_dropped() when the resource is dropped:
-        let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
+        let drop_guard = ResourceDropGuard::<K, V>::new(
+            self.untyped_client.scope_lookup,
+            resource_id,
+            cache_key,
+        );
 
         ArcLocalResource::new({
             move || {
@@ -268,12 +288,13 @@ impl<Codec: 'static> QueryClient<Codec> {
                 // Note: cannot hoist outside of resource,
                 // it prevents the resource itself dropping when the owner is held by the resource itself,
                 // here each instance only lasts as long as the query.
-                let owner_chain = OwnerChain::new(Owner::current());
+                let owner_chain = OwnerChain::new(client.untyped_client, Owner::current());
                 async move {
                     if let Some(key) = maybe_key {
                         let query_scope_query_info =
                             || QueryScopeQueryInfo::new_local(&query_scope, &key);
-                        let value = scope_lookup
+                        let value = client
+                            .untyped_client
                             .cached_or_fetch(
                                 client_options,
                                 query_options,
@@ -283,8 +304,12 @@ impl<Codec: 'static> QueryClient<Codec> {
                                 &key,
                                 {
                                     let query_scope = query_scope.clone();
-                                    async move |key| {
-                                        MaybeLocal::new_local(query_scope.query(key).await)
+                                    move |key| {
+                                        let query_scope = query_scope.clone();
+
+                                        async move {
+                                            MaybeLocal::new_local(query_scope.query(key).await)
+                                        }
                                     }
                                 },
                                 |info| {
@@ -494,77 +519,89 @@ impl<Codec: 'static> QueryClient<Codec> {
         let cache_key = query_scope.cache_key();
         let query_scope_info = QueryScopeInfo::new(&query_scope);
         let query_scope = Arc::new(query_scope);
-        let scope_lookup = self.scope_lookup;
+        let scope_lookup = self.untyped_client.scope_lookup;
         let query_options = query_scope.options();
 
         let buster_if_uncached = ArcRwSignal::new(new_buster_id());
         let resource_id = new_resource_id();
 
         // To call .mark_resource_dropped() when the resource is dropped:
-        let drop_guard = ResourceDropGuard::<K, V>::new(self.scope_lookup, resource_id, cache_key);
+        let drop_guard = ResourceDropGuard::<K, V>::new(
+            self.untyped_client.scope_lookup,
+            resource_id,
+            cache_key,
+        );
 
         let keyer = Arc::new(keyer);
-        let resource = ArcResource::new_with_options(
-            {
-                let buster_if_uncached = buster_if_uncached.clone();
-                let drop_guard = drop_guard.clone();
-                let keyer = keyer.clone();
-                move || {
-                    if let Some(key) = keyer().into_maybe_key() {
-                        let key_hash = KeyHash::new(&key);
-                        drop_guard.set_active_key(key_hash);
-                        scope_lookup.with_cached_query::<K, V, _>(
-                            &key_hash,
-                            &cache_key,
-                            |maybe_cached| {
-                                if let Some(cached) = maybe_cached {
-                                    // Buster must be returned for it to be tracked.
-                                    (Some(key.clone()), cached.buster.get())
-                                } else {
-                                    // Buster must be returned for it to be tracked.
-                                    (Some(key.clone()), buster_if_uncached.get())
-                                }
-                            },
-                        )
-                    } else {
-                        (None, buster_if_uncached.get())
-                    }
-                }
-            },
-            {
-                let buster_if_uncached = buster_if_uncached.clone();
-                let query_scope_info = query_scope_info.clone();
-                let query_scope = query_scope.clone();
-                move |(maybe_key, last_used_buster)| {
-                    let query_scope = query_scope.clone();
-                    let query_scope_info = query_scope_info.clone();
+        let resource =
+            ArcResource::new_with_options(
+                {
                     let buster_if_uncached = buster_if_uncached.clone();
-                    let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
-                    // Note: cannot hoist outside of resource,
-                    // it prevents the resource itself dropping when the owner is held by the resource itself,
-                    // here each instance only lasts as long as the query.
-                    let owner_chain = OwnerChain::new(Owner::current());
-                    async move {
-                        if let Some(key) = maybe_key {
-                            let query_scope_query_info =
-                                || QueryScopeQueryInfo::new(&query_scope, &key);
-                            let value = scope_lookup
-                                .cached_or_fetch(
-                                    client_options,
-                                    query_options,
-                                    Some(buster_if_uncached.clone()),
-                                    &query_scope_info,
-                                    query_scope_query_info,
-                                    &key,
-                                    {
-                                        let query_scope = query_scope.clone();
-                                        async move |key| {
-                                            MaybeLocal::new(query_scope.query(key).await)
-                                        }
-                                    },
-                                    |info| {
-                                        info.cached.mark_resource_active(resource_id);
-                                        match info.variant {
+                    let drop_guard = drop_guard.clone();
+                    let keyer = keyer.clone();
+                    move || {
+                        if let Some(key) = keyer().into_maybe_key() {
+                            let key_hash = KeyHash::new(&key);
+                            drop_guard.set_active_key(key_hash);
+                            scope_lookup.with_cached_query::<K, V, _>(
+                                &key_hash,
+                                &cache_key,
+                                |maybe_cached| {
+                                    if let Some(cached) = maybe_cached {
+                                        // Buster must be returned for it to be tracked.
+                                        (Some(key.clone()), cached.buster.get())
+                                    } else {
+                                        // Buster must be returned for it to be tracked.
+                                        (Some(key.clone()), buster_if_uncached.get())
+                                    }
+                                },
+                            )
+                        } else {
+                            (None, buster_if_uncached.get())
+                        }
+                    }
+                },
+                {
+                    let buster_if_uncached = buster_if_uncached.clone();
+                    let query_scope_info = query_scope_info.clone();
+                    let query_scope = query_scope.clone();
+                    move |(maybe_key, last_used_buster)| {
+                        let query_scope = query_scope.clone();
+                        let query_scope_info = query_scope_info.clone();
+                        let buster_if_uncached = buster_if_uncached.clone();
+                        let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
+                        // Note: cannot hoist outside of resource,
+                        // it prevents the resource itself dropping when the owner is held by the resource itself,
+                        // here each instance only lasts as long as the query.
+                        let owner_chain = OwnerChain::new(client.untyped_client, Owner::current());
+                        async move {
+                            if let Some(key) = maybe_key {
+                                let query_scope_query_info =
+                                    || QueryScopeQueryInfo::new(&query_scope, &key);
+                                let value =
+                                    client
+                                        .untyped_client
+                                        .cached_or_fetch(
+                                            client_options,
+                                            query_options,
+                                            Some(buster_if_uncached.clone()),
+                                            &query_scope_info,
+                                            query_scope_query_info,
+                                            &key,
+                                            {
+                                                let query_scope = query_scope.clone();
+                                                move |key| {
+                                                    let query_scope = query_scope.clone();
+                                                    async move {
+                                                        MaybeLocal::new(
+                                                            query_scope.query(key).await,
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            |info| {
+                                                info.cached.mark_resource_active(resource_id);
+                                                match info.variant {
                                             CachedOrFetchCbInputVariant::CachedUntouched => {
                                                 // If stale refetch in the background with the prefetch() function, which'll recognise it's stale, refetch it and invalidate busters:
                                                 if cfg!(any(test, not(feature = "ssr")))
@@ -587,13 +624,16 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                                 {
                                                                     let query_scope =
                                                                         query_scope.clone();
-                                                                    async move |key| {
+                                                                    move |key| {
+                                        let query_scope = query_scope.clone();
+
+                                                                        async move {
                                                                         MaybeLocal::new(
                                                                             query_scope
                                                                                 .query(key)
                                                                                 .await,
                                                                         )
-                                                                    }
+                                                                    }}
                                                                 },
                                                                 key.borrow(),
                                                                 || {
@@ -622,35 +662,35 @@ impl<Codec: 'static> QueryClient<Codec> {
                                                 panic!("Didn't direct inner to refetch here. (bug)")
                                             }
                                         }
-                                        CachedOrFetchCbOutput::Return(
-                                            // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
-                                            info.cached
-                                                .value_maybe_stale()
-                                                .value_may_panic()
-                                                .clone(),
+                                                CachedOrFetchCbOutput::Return(
+                                                    // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
+                                                    info.cached
+                                                        .value_maybe_stale()
+                                                        .value_may_panic()
+                                                        .clone(),
+                                                )
+                                            },
+                                            None,
+                                            || MaybeLocal::new(key.clone()),
+                                            &owner_chain,
                                         )
-                                    },
-                                    None,
-                                    || MaybeLocal::new(key.clone()),
-                                    &owner_chain,
-                                )
-                                .await;
-                            MaybeKey::prepare_mapped_value(Some(value))
-                        } else {
-                            MaybeKey::prepare_mapped_value(None)
+                                        .await;
+                                MaybeKey::prepare_mapped_value(Some(value))
+                            } else {
+                                MaybeKey::prepare_mapped_value(None)
+                            }
                         }
                     }
-                }
-            },
-            blocking,
-        );
+                },
+                blocking,
+            );
 
         // On the client, want to repopulate the frontend cache, so should write resources to the cache here if they don't exist.
         // It would be better if in here we could check if the resource was started on the backend/streamed, saves doing most of this if already a frontend resource.
         let effect = {
             let resource = resource.clone();
             let buster_if_uncached = buster_if_uncached.clone();
-            let client_created_at = self.created_at;
+            let client_created_at = self.untyped_client.created_at;
             // Converting to Arc because the tests like the client get dropped even though this persists:
             move |complete: Option<Option<()>>| {
                 if let Some(Some(())) = complete {
@@ -706,7 +746,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     if was_pending || !scope.contains_key(&key_hash) {
                                         let query = Query::new(
                                             client_options,
-                                            scope_lookup,
+                                            client.untyped_client,
                                             &query_scope_info,
                                             query_scope_query_info(),
                                             key_hash,
@@ -799,7 +839,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             async |key| MaybeLocal::new(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
+            &OwnerChain::new(self.untyped_client, Owner::current()),
         )
         .await
     }
@@ -826,25 +866,26 @@ impl<Codec: 'static> QueryClient<Codec> {
             async |key| MaybeLocal::new_local(query_scope.query(key).await),
             key.borrow(),
             || MaybeLocal::new_local(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
+            &OwnerChain::new(self.untyped_client, Owner::current()),
         )
         .await
     }
 
     #[track_caller]
-    async fn prefetch_inner<K, V>(
+    async fn prefetch_inner<K, V, FetcherFut>(
         &self,
         query_scope_info: QueryScopeInfo,
         query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
-        fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
+        fetcher: impl Fn(K) -> FetcherFut,
         key: &K,
         lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
         owner_chain: &OwnerChain,
     ) where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
+        FetcherFut: Future<Output = MaybeLocal<V>>,
     {
-        self.scope_lookup
+        self.untyped_client
             .cached_or_fetch(
                 self.options(),
                 query_scope_info.options,
@@ -894,16 +935,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Clone + Hash + Send + Sync + 'static,
         V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
     {
-        self.fetch_inner(
-            QueryScopeInfo::new(&query_scope),
-            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
-            async |key| MaybeLocal::new(query_scope.query(key).await),
-            key.borrow(),
-            None,
-            || MaybeLocal::new(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
-        )
-        .await
+        self.untyped_client.fetch_query(query_scope, key).await
     }
 
     /// Fetch a non-threadsafe query, store it in the cache for this thread only and return it.
@@ -925,64 +957,8 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.fetch_inner(
-            QueryScopeInfo::new_local(&query_scope),
-            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
-            async |key| MaybeLocal::new_local(query_scope.query(key).await),
-            key.borrow(),
-            None,
-            || MaybeLocal::new_local(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
-        )
-        .await
-    }
-
-    #[track_caller]
-    async fn fetch_inner<K, V>(
-        &self,
-        query_scope_info: QueryScopeInfo,
-        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
-        fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
-        key: &K,
-        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
-        lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
-        owner_chain: &OwnerChain,
-    ) -> V
-    where
-        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
-        V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {
-        self.scope_lookup
-            .cached_or_fetch(
-                self.options(),
-                query_scope_info.options,
-                None,
-                &query_scope_info,
-                query_scope_info_for_new_query,
-                key,
-                fetcher,
-                |info| {
-                    match info.variant {
-                        CachedOrFetchCbInputVariant::CachedUntouched => {
-                            if info.cached.stale() {
-                                return CachedOrFetchCbOutput::Refetch;
-                            }
-                        }
-                        CachedOrFetchCbInputVariant::CachedUpdated => {
-                            // Update anything using it:
-                            info.cached.buster.set(new_buster_id());
-                        }
-                        CachedOrFetchCbInputVariant::Fresh => {}
-                    }
-                    CachedOrFetchCbOutput::Return(
-                        // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
-                        info.cached.value_maybe_stale().value_may_panic().clone(),
-                    )
-                },
-                maybe_preheld_fetcher_mutex_guard,
-                lazy_maybe_local_key,
-                owner_chain,
-            )
+        self.untyped_client
+            .fetch_query_local(query_scope, key)
             .await
     }
 
@@ -1055,58 +1031,61 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let key_hash = KeyHash::new(key.borrow());
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut self.scope_lookup.scopes_mut(),
-            &query_scope_info,
-            true,
-            |_| {},
-            |maybe_scope, _| {
-                let scope = maybe_scope.expect("provided a default");
+        self.untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut self.untyped_client.scope_lookup.scopes_mut(),
+                &query_scope_info,
+                true,
+                |_| {},
+                |maybe_scope, _| {
+                    let scope = maybe_scope.expect("provided a default");
 
-                // Make sure to look both caches if threadsafe, and prefer threadsafe:
-                let maybe_cached = if !new_value.is_local() {
-                    if let Some(threadsafe_existing) = scope.get_mut_threadsafe_only(&key_hash) {
-                        Some(threadsafe_existing)
+                    // Make sure to look both caches if threadsafe, and prefer threadsafe:
+                    let maybe_cached = if !new_value.is_local() {
+                        if let Some(threadsafe_existing) = scope.get_mut_threadsafe_only(&key_hash)
+                        {
+                            Some(threadsafe_existing)
+                        } else {
+                            scope.get_mut_local_only(&key_hash)
+                        }
                     } else {
                         scope.get_mut_local_only(&key_hash)
-                    }
-                } else {
-                    scope.get_mut_local_only(&key_hash)
-                };
+                    };
 
-                if let Some(cached) = maybe_cached {
-                    cached.set_value(
-                        new_value,
-                        track,
-                        #[cfg(any(
-                            all(debug_assertions, feature = "devtools"),
-                            feature = "devtools-always"
-                        ))]
-                        crate::events::Event::new(crate::events::EventVariant::DeclarativeSet),
-                        reset_invalidated,
-                    );
-                } else {
-                    let query = Query::new(
-                        self.options(),
-                        self.scope_lookup,
-                        &query_scope_info,
-                        query_scope_info_for_new_query(),
-                        key_hash,
-                        lazy_maybe_local_key(),
-                        new_value,
-                        ArcRwSignal::new(new_buster_id()),
-                        query_scope_info.options,
-                        None,
-                        #[cfg(any(
-                            all(debug_assertions, feature = "devtools"),
-                            feature = "devtools-always"
-                        ))]
-                        crate::events::Event::new(crate::events::EventVariant::DeclarativeSet),
-                    );
-                    scope.insert(key_hash, query);
-                }
-            },
-        );
+                    if let Some(cached) = maybe_cached {
+                        cached.set_value(
+                            new_value,
+                            track,
+                            #[cfg(any(
+                                all(debug_assertions, feature = "devtools"),
+                                feature = "devtools-always"
+                            ))]
+                            crate::events::Event::new(crate::events::EventVariant::DeclarativeSet),
+                            reset_invalidated,
+                        );
+                    } else {
+                        let query = Query::new(
+                            self.options(),
+                            self.untyped_client,
+                            &query_scope_info,
+                            query_scope_info_for_new_query(),
+                            key_hash,
+                            lazy_maybe_local_key(),
+                            new_value,
+                            ArcRwSignal::new(new_buster_id()),
+                            query_scope_info.options,
+                            None,
+                            #[cfg(any(
+                                all(debug_assertions, feature = "devtools"),
+                                feature = "devtools-always"
+                            ))]
+                            crate::events::Event::new(crate::events::EventVariant::DeclarativeSet),
+                        );
+                        scope.insert(key_hash, query);
+                    }
+                },
+            );
     }
 
     /// Synchronously update the value of a query in the cache with a callback.
@@ -1155,33 +1134,38 @@ impl<Codec: 'static> QueryClient<Codec> {
         let key_hash = KeyHash::new(key);
         let mut modifier_holder = Some(modifier);
 
-        let maybe_return_value = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut self.scope_lookup.scopes_mut(),
-            query_scope_info,
-            false,
-            |_| {},
-            |maybe_scope, _| {
-                if let Some(scope) = maybe_scope
-                    && let Some(cached) = scope.get_mut(&key_hash)
-                {
-                    let modifier = modifier_holder
-                        .take()
-                        .expect("Should never be used more than once. (bug)");
-                    let return_value = cached.update_value(
-                        // WONTPANIC: the internals will only supply the value if available from this thread:
-                        |value| modifier(Some(value.value_mut_may_panic())),
-                        #[cfg(any(
-                            all(debug_assertions, feature = "devtools"),
-                            feature = "devtools-always"
-                        ))]
-                        crate::events::Event::new(crate::events::EventVariant::DeclarativeUpdate),
-                        reset_invalidated,
-                    );
-                    return Some(return_value);
-                }
-                None
-            },
-        );
+        let maybe_return_value = self
+            .untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut self.untyped_client.scope_lookup.scopes_mut(),
+                query_scope_info,
+                false,
+                |_| {},
+                |maybe_scope, _| {
+                    if let Some(scope) = maybe_scope
+                        && let Some(cached) = scope.get_mut(&key_hash)
+                    {
+                        let modifier = modifier_holder
+                            .take()
+                            .expect("Should never be used more than once. (bug)");
+                        let return_value = cached.update_value(
+                            // WONTPANIC: the internals will only supply the value if available from this thread:
+                            |value| modifier(Some(value.value_mut_may_panic())),
+                            #[cfg(any(
+                                all(debug_assertions, feature = "devtools"),
+                                feature = "devtools-always"
+                            ))]
+                            crate::events::Event::new(
+                                crate::events::EventVariant::DeclarativeUpdate,
+                            ),
+                            reset_invalidated,
+                        );
+                        return Some(return_value);
+                    }
+                    None
+                },
+            );
         if let Some(return_value) = maybe_return_value {
             return_value
         } else {
@@ -1221,7 +1205,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             mapper,
             MaybeLocal::new,
             || MaybeLocal::new(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
+            &OwnerChain::new(self.untyped_client, Owner::current()),
         )
         .await
     }
@@ -1255,17 +1239,17 @@ impl<Codec: 'static> QueryClient<Codec> {
             mapper,
             MaybeLocal::new_local,
             || MaybeLocal::new_local(key.borrow().clone()),
-            &OwnerChain::new(Owner::current()),
+            &OwnerChain::new(self.untyped_client, Owner::current()),
         )
         .await
     }
 
     #[track_caller]
-    async fn update_query_async_inner<'a, K, V, T>(
+    async fn update_query_async_inner<'a, K, V, T, FetcherFut>(
         &'a self,
         query_scope_info: QueryScopeInfo,
         query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
-        fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
+        fetcher: impl Fn(K) -> FetcherFut,
         key: &K,
         mapper: impl AsyncFnOnce(&mut V) -> T,
         into_maybe_local: impl FnOnce(V) -> MaybeLocal<V>,
@@ -1275,16 +1259,19 @@ impl<Codec: 'static> QueryClient<Codec> {
     where
         K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
+        FetcherFut: Future<Output = MaybeLocal<V>>,
     {
         let key_hash = KeyHash::new(key.borrow());
 
         // By holding the fetcher mutex from start to finish, prevent the chance of the value being fetched between the fetch async call and the external user mapper async call and the final set().
         let fetcher_mutex = self
+            .untyped_client
             .scope_lookup
             .fetcher_mutex::<K, V>(key_hash, &query_scope_info);
         let fetcher_guard = fetcher_mutex.lock().await;
 
         let mut new_value = self
+            .untyped_client
             .fetch_inner(
                 query_scope_info.clone(),
                 &query_scope_info_for_new_query,
@@ -1297,16 +1284,20 @@ impl<Codec: 'static> QueryClient<Codec> {
             .await;
 
         // The fetch will "turn on" is_fetching during it's lifetime, but we also want it during the mapper function:
-        self.scope_lookup
+        self.untyped_client
+            .scope_lookup
             .with_notify_fetching(query_scope_info.cache_key, key_hash, false, async {
                 let track = Arc::new(AtomicBool::new(true));
 
                 // Will monitor for invalidations during the user async fn, which could take a long time:
-                let query_abort_rx = self.scope_lookup.prepare_invalidation_channel::<K, V>(
-                    &query_scope_info,
-                    key_hash,
-                    &lazy_maybe_local_key(),
-                );
+                let query_abort_rx = self
+                    .untyped_client
+                    .scope_lookup
+                    .prepare_invalidation_channel::<K, V>(
+                        &query_scope_info,
+                        key_hash,
+                        &lazy_maybe_local_key(),
+                    );
 
                 let result_fut = ASYNC_TRACK_UPDATE_MARKER
                     .scope(track.clone(), async { mapper(&mut new_value).await });
@@ -1396,14 +1387,16 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        self.scope_lookup.with_cached_query::<K, V, _>(
-            &KeyHash::new(key.borrow()),
-            &query_scope.cache_key(),
-            |maybe_cached| {
-                // WONTPANIC: with_cached_query will only output values that are safe on this thread:
-                maybe_cached.map(|cached| cached.value_maybe_stale().value_may_panic().clone())
-            },
-        )
+        self.untyped_client
+            .scope_lookup
+            .with_cached_query::<K, V, _>(
+                &KeyHash::new(key.borrow()),
+                &query_scope.cache_key(),
+                |maybe_cached| {
+                    // WONTPANIC: with_cached_query will only output values that are safe on this thread:
+                    maybe_cached.map(|cached| cached.value_maybe_stale().value_may_panic().clone())
+                },
+            )
     }
 
     /// Synchronously check if a query exists in the cache.
@@ -1420,11 +1413,11 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let key_hash = KeyHash::new(key.borrow());
-        self.scope_lookup.with_cached_query::<K, V, _>(
-            &key_hash,
-            &query_scope.cache_key(),
-            |maybe_cached| maybe_cached.is_some(),
-        )
+        self.untyped_client
+            .scope_lookup
+            .with_cached_query::<K, V, _>(&key_hash, &query_scope.cache_key(), |maybe_cached| {
+                maybe_cached.is_some()
+            })
     }
 
     /// Subscribe to the `is_loading` status of a query.
@@ -1501,7 +1494,8 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: 'static,
     {
         let keyer = SendWrapper::new(keyer);
-        self.scope_lookup
+        self.untyped_client
+            .scope_lookup
             .scope_subscriptions_mut()
             .add_is_loading_subscription(
                 query_scope.cache_key(),
@@ -1533,7 +1527,8 @@ impl<Codec: 'static> QueryClient<Codec> {
         MaybeKey::MappedValue: 'static,
         V: 'static,
     {
-        self.scope_lookup
+        self.untyped_client
+            .scope_lookup
             .scope_subscriptions_mut()
             .add_is_loading_subscription(
                 query_scope.cache_key(),
@@ -1617,7 +1612,8 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: 'static,
     {
         let keyer = SendWrapper::new(keyer);
-        self.scope_lookup
+        self.untyped_client
+            .scope_lookup
             .scope_subscriptions_mut()
             .add_is_fetching_subscription(
                 query_scope.cache_key(),
@@ -1649,7 +1645,8 @@ impl<Codec: 'static> QueryClient<Codec> {
         MaybeKey::MappedValue: 'static,
         V: 'static,
     {
-        self.scope_lookup
+        self.untyped_client
+            .scope_lookup
             .scope_subscriptions_mut()
             .add_is_fetching_subscription(
                 query_scope.cache_key(),
@@ -1727,6 +1724,7 @@ impl<Codec: 'static> QueryClient<Codec> {
             keyer().into_maybe_key().map(|k| KeyHash::new(&k))
         });
         let dyn_signal = self
+            .untyped_client
             .scope_lookup
             .scope_subscriptions_mut()
             .add_value_set_updated_or_removed_subscription(
@@ -1737,7 +1735,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 }),
             );
 
-        let scope_lookup = self.scope_lookup;
+        let scope_lookup = self.untyped_client.scope_lookup;
         ArcLocalSignal::derive_local(move || {
             dyn_signal.track();
             if let Some(key) = keyer.read_untracked().as_ref() {
@@ -1774,6 +1772,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         let keyer = ArcSignal::derive(move || keyer().into_maybe_key().map(|k| KeyHash::new(&k)));
 
         let dyn_signal = self
+            .untyped_client
             .scope_lookup
             .scope_subscriptions_mut()
             .add_value_set_updated_or_removed_subscription(
@@ -1784,7 +1783,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                 }),
             );
 
-        let scope_lookup = self.scope_lookup;
+        let scope_lookup = self.untyped_client.scope_lookup;
         ArcSignal::derive(move || {
             dyn_signal.track();
             if let Some(key) = keyer.read_untracked().as_ref() {
@@ -1811,8 +1810,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let cleared = self.invalidate_queries(query_scope, std::iter::once(key));
-        !cleared.is_empty()
+        self.untyped_client.invalidate_query(query_scope, key)
     }
 
     /// Mark multiple queries of a specific type as stale.
@@ -1829,7 +1827,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
         KRef: Borrow<K>,
     {
-        self.invalidate_queries_inner::<K, V, _>(&QueryScopeInfo::new_local(&query_scope), keys)
+        self.untyped_client.invalidate_queries(query_scope, keys)
     }
 
     /// Mark one or more queries of a specific type as stale with a callback.
@@ -1847,26 +1845,28 @@ impl<Codec: 'static> QueryClient<Codec> {
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let mut scopes = self.scope_lookup.scopes_mut();
+        let mut scopes = self.untyped_client.scope_lookup.scopes_mut();
         let mut cbs_scopes = vec![];
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut scopes,
-            &QueryScopeInfo::new_local(&query_scope),
-            false,
-            |_| {},
-            |maybe_scope, _| {
-                if let Some(scope) = maybe_scope {
-                    for query in scope.all_queries_mut_include_pending() {
-                        if let Some(key) = query.key().value_if_safe()
-                            && should_invalidate(key)
-                        {
-                            let cb_scopes = query.invalidate(QueryAbortReason::Invalidate);
-                            cbs_scopes.push(cb_scopes);
+        self.untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut scopes,
+                &QueryScopeInfo::new_local(&query_scope),
+                false,
+                |_| {},
+                |maybe_scope, _| {
+                    if let Some(scope) = maybe_scope {
+                        for query in scope.all_queries_mut_include_pending() {
+                            if let Some(key) = query.key().value_if_safe()
+                                && should_invalidate(key)
+                            {
+                                let cb_scopes = query.invalidate(QueryAbortReason::Invalidate);
+                                cbs_scopes.push(cb_scopes);
+                            }
                         }
                     }
-                }
-            },
-        );
+                },
+            );
         let mut cbs_external = vec![];
         for cb in cbs_scopes {
             if let Some(cb_external) = cb(&mut scopes) {
@@ -1874,9 +1874,344 @@ impl<Codec: 'static> QueryClient<Codec> {
             }
         }
         drop(scopes);
-        for cb in cbs_external {
-            cb();
+        run_external_callbacks(self.untyped_client, cbs_external);
+    }
+
+    /// Mark all queries of a specific type as stale.
+    ///
+    /// Any active resources will refetch in the background, replacing them when ready.
+    #[track_caller]
+    pub fn invalidate_query_scope<K, V, M>(&self, query_scope: impl QueryScopeLocalTrait<K, V, M>)
+    where
+        K: Hash + 'static,
+        V: Clone + 'static,
+    {
+        self.invalidate_query_scope_inner(&query_scope.cache_key())
+    }
+
+    pub(crate) fn invalidate_query_scope_inner(&self, scope_cache_key: &ScopeCacheKey) {
+        let mut scopes = self.untyped_client.scope_lookup.scopes_mut();
+        let mut cbs_scopes = vec![];
+        if let Some(scope) = scopes.get_mut(scope_cache_key) {
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs_scopes.push(cb_scopes);
+            for buster in scope.busters() {
+                buster.try_set(new_buster_id());
+            }
         }
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        run_external_callbacks(self.untyped_client, cbs_external);
+    }
+
+    /// Mark all queries as stale.
+    ///
+    /// Any active resources will refetch in the background, replacing them when ready.
+    ///
+    /// To have the cache instantly cleared and all listeners reset to pending, e.g. for user logout,
+    /// see [`QueryClient::clear`].
+    #[track_caller]
+    pub fn invalidate_all_queries(&self) {
+        let mut scopes = self.untyped_client.scope_lookup.scopes_mut();
+        let mut cbs_scopes = vec![];
+        for scope in scopes.values_mut() {
+            let busters = scope.busters();
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
+            cbs_scopes.push(cb_scopes);
+            for buster in busters {
+                buster.try_set(new_buster_id());
+            }
+        }
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        run_external_callbacks(self.untyped_client, cbs_external);
+    }
+
+    /// Empty the cache, like [`QueryClient::invalidate_all_queries`] except:
+    /// - the cache is instantly cleared of all queries
+    /// - All active resources etc are reset to their pending state instantly
+    ///   until the new query finishes refetching.
+    ///
+    /// Useful for e.g. user logout.
+    ///
+    /// [`QueryClient::invalidate_all_queries`] on the other hand, will only refetch active queries in the background, replacing them when ready.
+    #[track_caller]
+    pub fn clear(&self) {
+        let mut scopes = self.untyped_client.scope_lookup.scopes_mut();
+        let mut cbs_scopes = vec![];
+        for scope in scopes.values_mut() {
+            let busters = scope.busters();
+            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Clear);
+            cbs_scopes.push(cb_scopes);
+            scope.clear();
+            for buster in busters {
+                buster.try_set(new_buster_id());
+            }
+        }
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        run_external_callbacks(self.untyped_client, cbs_external);
+    }
+
+    #[cfg(test)]
+    /// Clear a specific query key.
+    #[track_caller]
+    pub fn clear_query<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> bool
+    where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        let mut scopes = self.untyped_client.scope_lookup.scopes_mut();
+        let mut cbs_scopes = vec![];
+        let result = self
+            .untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut scopes,
+                &QueryScopeInfo::new_local(&query_scope),
+                false,
+                |_| {},
+                |maybe_scope, _| {
+                    if let Some(scope) = maybe_scope {
+                        let key_hash = KeyHash::new(key.borrow());
+                        if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
+                            let cb_scopes = cached.invalidate(QueryAbortReason::Clear);
+                            cbs_scopes.push(cb_scopes);
+                        }
+                        let removed = scope.remove_entry(&key_hash);
+                        // Calling it again just in case because in tests might be in sync cache and non sync cache:
+                        scope.remove_entry(&KeyHash::new(key.borrow()));
+                        return removed.is_some();
+                    }
+                    false
+                },
+            );
+        let mut cbs_external = vec![];
+        for cb in cbs_scopes {
+            if let Some(cb_external) = cb(&mut scopes) {
+                cbs_external.push(cb_external);
+            }
+        }
+        drop(scopes);
+        run_external_callbacks(self.untyped_client, cbs_external);
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn size(&self) -> usize {
+        self.untyped_client
+            .scope_lookup
+            .scopes()
+            .values()
+            .map(|scope| scope.size())
+            .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_key_invalid<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> bool
+    where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        self.untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut self.untyped_client.scope_lookup.scopes_mut(),
+                &QueryScopeInfo::new_local(&query_scope),
+                false,
+                |_| {},
+                |maybe_scope, _| {
+                    if let Some(scope) = maybe_scope {
+                        scope
+                            .get(&KeyHash::new(key.borrow()))
+                            .map(|query| query.is_invalidated())
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                },
+            )
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn mark_key_valid<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        self.untyped_client
+            .scope_lookup
+            .with_cached_scope_mut::<K, V, _, _>(
+                &mut self.untyped_client.scope_lookup.scopes_mut(),
+                &QueryScopeInfo::new_local(&query_scope),
+                false,
+                |_| {},
+                |maybe_scope, _| {
+                    if let Some(scope) = maybe_scope
+                        && let Some(query) = scope.get_mut(&KeyHash::new(key.borrow()))
+                    {
+                        query.mark_valid();
+                    }
+                },
+            );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscriber_count(&self) -> usize {
+        self.untyped_client
+            .scope_lookup
+            .scope_subscriptions_mut()
+            .count()
+    }
+}
+
+impl UntypedQueryClient {
+    #[track_caller]
+    pub(crate) async fn fetch_query<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> V
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + Send + Sync + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + Send + Sync + 'static,
+    {
+        self.fetch_inner(
+            QueryScopeInfo::new(&query_scope),
+            || QueryScopeQueryInfo::new(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new(query_scope.query(key).await),
+            key.borrow(),
+            None,
+            || MaybeLocal::new(key.borrow().clone()),
+            &OwnerChain::new(*self, Owner::current()),
+        )
+        .await
+    }
+
+    #[track_caller]
+    pub(crate) async fn fetch_query_local<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> V
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        self.fetch_inner(
+            QueryScopeInfo::new_local(&query_scope),
+            || QueryScopeQueryInfo::new_local(&query_scope, key.borrow()),
+            async |key| MaybeLocal::new_local(query_scope.query(key).await),
+            key.borrow(),
+            None,
+            || MaybeLocal::new_local(key.borrow().clone()),
+            &OwnerChain::new(*self, Owner::current()),
+        )
+        .await
+    }
+
+    #[track_caller]
+    async fn fetch_inner<K, V, FetcherFut>(
+        &self,
+        query_scope_info: QueryScopeInfo,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
+        fetcher: impl Fn(K) -> FetcherFut,
+        key: &K,
+        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
+        lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
+    ) -> V
+    where
+        K: DebugIfDevtoolsEnabled + Clone + Hash + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+        FetcherFut: Future<Output = MaybeLocal<V>>,
+    {
+        self.cached_or_fetch(
+            self.options,
+            query_scope_info.options,
+            None,
+            &query_scope_info,
+            query_scope_info_for_new_query,
+            key,
+            fetcher,
+            |info| {
+                match info.variant {
+                    CachedOrFetchCbInputVariant::CachedUntouched => {
+                        if info.cached.stale() {
+                            return CachedOrFetchCbOutput::Refetch;
+                        }
+                    }
+                    CachedOrFetchCbInputVariant::CachedUpdated => {
+                        // Update anything using it:
+                        info.cached.buster.set(new_buster_id());
+                    }
+                    CachedOrFetchCbInputVariant::Fresh => {}
+                }
+                CachedOrFetchCbOutput::Return(
+                    // WONTPANIC: cached_or_fetch will only output values that are safe on this thread:
+                    info.cached.value_maybe_stale().value_may_panic().clone(),
+                )
+            },
+            maybe_preheld_fetcher_mutex_guard,
+            lazy_maybe_local_key,
+            owner_chain,
+        )
+        .await
+    }
+
+    #[track_caller]
+    pub(crate) fn invalidate_query<K, V, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        key: impl Borrow<K>,
+    ) -> bool
+    where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+    {
+        let cleared = self.invalidate_queries(query_scope, std::iter::once(key));
+        !cleared.is_empty()
+    }
+
+    #[track_caller]
+    pub(crate) fn invalidate_queries<K, V, KRef, M>(
+        &self,
+        query_scope: impl QueryScopeLocalTrait<K, V, M>,
+        keys: impl IntoIterator<Item = KRef>,
+    ) -> Vec<KRef>
+    where
+        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
+        V: DebugIfDevtoolsEnabled + Clone + 'static,
+        KRef: Borrow<K>,
+    {
+        self.invalidate_queries_inner::<K, V, _>(&QueryScopeInfo::new_local(&query_scope), keys)
     }
 
     #[track_caller]
@@ -1928,220 +2263,256 @@ impl<Codec: 'static> QueryClient<Codec> {
             }
         }
         drop(scopes);
-        for cb in cbs_external {
-            cb();
-        }
+        run_external_callbacks(*self, cbs_external);
         results
     }
 
-    /// Mark all queries of a specific type as stale.
-    ///
-    /// Any active resources will refetch in the background, replacing them when ready.
-    #[track_caller]
-    pub fn invalidate_query_scope<K, V, M>(&self, query_scope: impl QueryScopeLocalTrait<K, V, M>)
-    where
-        K: Hash + 'static,
-        V: Clone + 'static,
-    {
-        self.invalidate_query_scope_inner(&query_scope.cache_key())
-    }
-
-    pub(crate) fn invalidate_query_scope_inner(&self, scope_cache_key: &ScopeCacheKey) {
-        let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs_scopes = vec![];
-        if let Some(scope) = scopes.get_mut(scope_cache_key) {
-            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
-            cbs_scopes.push(cb_scopes);
-            for buster in scope.busters() {
-                buster.try_set(new_buster_id());
-            }
-        }
-        let mut cbs_external = vec![];
-        for cb in cbs_scopes {
-            if let Some(cb_external) = cb(&mut scopes) {
-                cbs_external.push(cb_external);
-            }
-        }
-        drop(scopes);
-        for cb in cbs_external {
-            cb();
-        }
-    }
-
-    /// Mark all queries as stale.
-    ///
-    /// Any active resources will refetch in the background, replacing them when ready.
-    ///
-    /// To have the cache instantly cleared and all listeners reset to pending, e.g. for user logout,
-    /// see [`QueryClient::clear`].
-    #[track_caller]
-    pub fn invalidate_all_queries(&self) {
-        let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs_scopes = vec![];
-        for scope in scopes.values_mut() {
-            let busters = scope.busters();
-            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Invalidate);
-            cbs_scopes.push(cb_scopes);
-            for buster in busters {
-                buster.try_set(new_buster_id());
-            }
-        }
-        let mut cbs_external = vec![];
-        for cb in cbs_scopes {
-            if let Some(cb_external) = cb(&mut scopes) {
-                cbs_external.push(cb_external);
-            }
-        }
-        drop(scopes);
-        for cb in cbs_external {
-            cb();
-        }
-    }
-
-    /// Empty the cache, like [`QueryClient::invalidate_all_queries`] except:
-    /// - the cache is instantly cleared of all queries
-    /// - All active resources etc are reset to their pending state instantly
-    ///   until the new query finishes refetching.
-    ///
-    /// Useful for e.g. user logout.
-    ///
-    /// [`QueryClient::invalidate_all_queries`] on the other hand, will only refetch active queries in the background, replacing them when ready.
-    #[track_caller]
-    pub fn clear(&self) {
-        let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs_scopes = vec![];
-        for scope in scopes.values_mut() {
-            let busters = scope.busters();
-            let cb_scopes = scope.invalidate_scope(QueryAbortReason::Clear);
-            cbs_scopes.push(cb_scopes);
-            scope.clear();
-            for buster in busters {
-                buster.try_set(new_buster_id());
-            }
-        }
-        let mut cbs_external = vec![];
-        for cb in cbs_scopes {
-            if let Some(cb_external) = cb(&mut scopes) {
-                cbs_external.push(cb_external);
-            }
-        }
-        drop(scopes);
-        for cb in cbs_external {
-            cb();
-        }
-    }
-
-    #[cfg(test)]
-    /// Clear a specific query key.
-    #[track_caller]
-    pub fn clear_query<K, V, M>(
+    pub async fn cached_or_fetch<K, V, T, FetcherFut>(
         &self,
-        query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        key: impl Borrow<K>,
-    ) -> bool
+        client_options: QueryOptions,
+        scope_options: Option<QueryOptions>,
+        maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
+        query_scope_info: &QueryScopeInfo,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
+        key: &K,
+        fetcher: impl Fn(K) -> FetcherFut,
+        return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
+        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
+        lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
+        owner_chain: &OwnerChain,
+    ) -> T
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
+        FetcherFut: Future<Output = MaybeLocal<V>>,
     {
-        let mut scopes = self.scope_lookup.scopes_mut();
-        let mut cbs_scopes = vec![];
-        let result = self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut scopes,
-            &QueryScopeInfo::new_local(&query_scope),
-            false,
-            |_| {},
-            |maybe_scope, _| {
-                if let Some(scope) = maybe_scope {
-                    let key_hash = KeyHash::new(key.borrow());
-                    if let Some(cached) = scope.get_mut_include_pending(&key_hash) {
-                        let cb_scopes = cached.invalidate(QueryAbortReason::Clear);
-                        cbs_scopes.push(cb_scopes);
-                    }
-                    let removed = scope.remove_entry(&key_hash);
-                    // Calling it again just in case because in tests might be in sync cache and non sync cache:
-                    scope.remove_entry(&KeyHash::new(key.borrow()));
-                    return removed.is_some();
-                }
-                false
-            },
-        );
-        let mut cbs_external = vec![];
-        for cb in cbs_scopes {
-            if let Some(cb_external) = cb(&mut scopes) {
-                cbs_external.push(cb_external);
-            }
-        }
-        drop(scopes);
-        for cb in cbs_external {
-            cb();
-        }
-        result
-    }
-
-    #[cfg(test)]
-    pub(crate) fn size(&self) -> usize {
-        self.scope_lookup
-            .scopes()
-            .values()
-            .map(|scope| scope.size())
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_key_invalid<K, V, M>(
-        &self,
-        query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        key: impl Borrow<K>,
-    ) -> bool
-    where
-        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
-        V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut self.scope_lookup.scopes_mut(),
-            &QueryScopeInfo::new_local(&query_scope),
-            false,
-            |_| {},
-            |maybe_scope, _| {
-                if let Some(scope) = maybe_scope {
-                    scope
-                        .get(&KeyHash::new(key.borrow()))
-                        .map(|query| query.is_invalidated())
-                        .unwrap_or(false)
+        let scope_lookup = &self.scope_lookup;
+        let key_hash = KeyHash::new(key);
+        let mut cached_buster = None;
+        let next_directive = scope_lookup.with_cached_query::<K, V, _>(
+            &key_hash,
+            &query_scope_info.cache_key,
+            |maybe_cached| {
+                if let Some(cached) = maybe_cached {
+                    cached_buster = Some(cached.buster.clone());
+                    return_cb(CachedOrFetchCbInput {
+                        cached,
+                        variant: CachedOrFetchCbInputVariant::CachedUntouched,
+                    })
                 } else {
-                    false
-                }
-            },
-        )
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn mark_key_valid<K, V, M>(
-        &self,
-        query_scope: impl QueryScopeLocalTrait<K, V, M>,
-        key: impl Borrow<K>,
-    ) where
-        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
-        V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {
-        self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
-            &mut self.scope_lookup.scopes_mut(),
-            &QueryScopeInfo::new_local(&query_scope),
-            false,
-            |_| {},
-            |maybe_scope, _| {
-                if let Some(scope) = maybe_scope
-                    && let Some(query) = scope.get_mut(&KeyHash::new(key.borrow()))
-                {
-                    query.mark_valid();
+                    CachedOrFetchCbOutput::Refetch
                 }
             },
         );
-    }
 
-    #[cfg(test)]
-    pub(crate) fn subscriber_count(&self) -> usize {
-        self.scope_lookup.scope_subscriptions_mut().count()
+        match next_directive {
+            CachedOrFetchCbOutput::Return(value) => value,
+            CachedOrFetchCbOutput::Refetch => {
+                // Will probably need to fetch, unless someone fetches whilst trying to get hold of the fetch mutex:
+                let fetcher_mutex = scope_lookup.fetcher_mutex::<K, V>(key_hash, query_scope_info);
+                let _maybe_fetcher_mutex_guard_local = if maybe_preheld_fetcher_mutex_guard
+                    .is_none()
+                {
+                    let _fetcher_guard = match fetcher_mutex.try_lock() {
+                        Some(fetcher_guard) => fetcher_guard,
+                        None => {
+                            // If have to wait, should check cache again in case it was fetched while waiting.
+                            let fetcher_guard = fetcher_mutex.lock().await;
+                            let next_directive = scope_lookup.with_cached_query::<K, V, _>(
+                                &key_hash,
+                                &query_scope_info.cache_key,
+                                |maybe_cached| {
+                                    if let Some(cached) = maybe_cached {
+                                        cached_buster = Some(cached.buster.clone());
+                                        return_cb(CachedOrFetchCbInput {
+                                            cached,
+                                            variant: CachedOrFetchCbInputVariant::CachedUntouched,
+                                        })
+                                    } else {
+                                        CachedOrFetchCbOutput::Refetch
+                                    }
+                                },
+                            );
+                            match next_directive {
+                                CachedOrFetchCbOutput::Return(value) => return value,
+                                CachedOrFetchCbOutput::Refetch => fetcher_guard,
+                            }
+                        }
+                    };
+                    Some(_fetcher_guard)
+                } else {
+                    // Owned externally so not an issue.
+                    None
+                };
+
+                #[cfg(any(
+                    all(debug_assertions, feature = "devtools"),
+                    feature = "devtools-always"
+                ))]
+                let before_time = chrono::Utc::now();
+
+                let loading_first_time = cached_buster.is_none();
+
+                #[cfg(any(
+                    all(debug_assertions, feature = "devtools"),
+                    feature = "devtools-always"
+                ))]
+                {
+                    // Running this before fetching so it'll show up in devtools straight away:
+                    if loading_first_time {
+                        scope_lookup
+                            .client_subscriptions_mut()
+                            .notify_query_created(crate::subs_client::QueryCreatedInfo {
+                                cache_key: query_scope_info.cache_key,
+                                scope_title: query_scope_info.title.clone(),
+                                key_hash,
+                                debug_key: crate::utils::DebugValue::new(key),
+                                combined_options: crate::options_combine(
+                                    client_options,
+                                    scope_options,
+                                ),
+                            });
+                    }
+                }
+
+                let maybe_local_key = lazy_maybe_local_key();
+
+                enum MaybeNewValue<V> {
+                    NewValue(V),
+                    SsrStreamedValueOverride,
+                }
+
+                let maybe_new_value = scope_lookup
+                    .with_notify_fetching(
+                        query_scope_info.cache_key,
+                        key_hash,
+                        loading_first_time,
+                        // Call the fetcher, but reset and repeat if an invalidation occurs whilst in-flight:
+                        async {
+                            loop {
+                                let query_abort_rx = scope_lookup
+                                    .prepare_invalidation_channel::<K, V>(
+                                        query_scope_info,
+                                        key_hash,
+                                        &maybe_local_key,
+                                    );
+
+                                let fut = owner_chain.with(|| fetcher(key.clone()));
+
+                                futures::select_biased! {
+                                    rx_result = query_abort_rx.fuse() => {
+                                        if let Ok(reason) = rx_result {
+                                            match reason {
+                                                QueryAbortReason::Invalidate | QueryAbortReason::Clear => {},
+                                                QueryAbortReason::SsrStreamedValueOverride => {
+                                                    break MaybeNewValue::SsrStreamedValueOverride;
+                                                },
+                                            }
+                                        }
+                                    },
+                                    new_value = fut.fuse() => {
+                                        break MaybeNewValue::NewValue(new_value);
+                                    },
+                                }
+                            }
+                        },
+                    )
+                    .await;
+
+                #[cfg(any(
+                    all(debug_assertions, feature = "devtools"),
+                    feature = "devtools-always"
+                ))]
+                let elapsed_ms = chrono::Utc::now()
+                    .signed_duration_since(before_time)
+                    .num_milliseconds();
+
+                let buster_if_uncached = if loading_first_time {
+                    Some(
+                        maybe_buster_if_uncached
+                            .unwrap_or_else(|| ArcRwSignal::new(new_buster_id())),
+                    )
+                } else {
+                    None
+                };
+
+                let next_directive = scope_lookup.with_cached_scope_mut::<_, _, _, _>(
+                    &mut scope_lookup.scopes_mut(),
+                    query_scope_info,
+                    true,
+                    |_| {},
+                    |scope, _| {
+                        let scope = scope.expect("provided a default");
+                        match maybe_new_value {
+                            MaybeNewValue::NewValue(new_value) => {
+                                if let Some(cached) = scope.get_mut(&key_hash) {
+                                    cached.set_value(
+                                        new_value,
+                                        true,
+                                        #[cfg(any(
+                                            all(debug_assertions, feature = "devtools"),
+                                            feature = "devtools-always"
+                                        ))]
+                                        crate::events::Event::new(
+                                            crate::events::EventVariant::Fetched { elapsed_ms },
+                                        ),
+                                        ResetInvalidated::Reset,
+                                    );
+                                    return_cb(CachedOrFetchCbInput {
+                                        cached,
+                                        variant: CachedOrFetchCbInputVariant::CachedUpdated,
+                                    })
+                                } else {
+                                    // We already notified before the async fetch, so it would show up sooner.
+                                    scope.insert_without_query_created_notif(
+                                        key_hash,
+                                        Query::new(
+                                            client_options,
+                                            *self,
+                                            query_scope_info,
+                                            query_scope_info_for_new_query(),
+                                            key_hash,
+                                            maybe_local_key,
+                                            new_value,
+                                            buster_if_uncached.expect(
+                                                "loading_first_time means this is Some(). (bug)",
+                                            ),
+                                            scope_options,
+                                            None,
+                                            #[cfg(any(
+                                                all(debug_assertions, feature = "devtools"),
+                                                feature = "devtools-always"
+                                            ))]
+                                            crate::events::Event::new(
+                                                crate::events::EventVariant::Fetched { elapsed_ms },
+                                            ),
+                                        ),
+                                    );
+                                    return_cb(CachedOrFetchCbInput {
+                                        cached: scope.get(&key_hash).expect("Just set. (bug)"),
+                                        variant: CachedOrFetchCbInputVariant::Fresh,
+                                    })
+                                }
+                            }
+                            MaybeNewValue::SsrStreamedValueOverride => {
+                                return_cb(CachedOrFetchCbInput {
+                                    cached: scope
+                                        .get(&key_hash)
+                                        .expect("Should contain value streamed from server. (bug)"),
+                                    variant: CachedOrFetchCbInputVariant::Fresh,
+                                })
+                            }
+                        }
+                    },
+                );
+
+                match next_directive {
+                    CachedOrFetchCbOutput::Refetch => {
+                        panic!("Unexpected refetch directive after providing fresh value. (bug)")
+                    }
+                    CachedOrFetchCbOutput::Return(return_value) => return_value,
+                }
+            }
+        }
     }
 }

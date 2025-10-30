@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
-    QueryOptions, SYNC_TRACK_UPDATE_MARKER,
+    QueryOptions, SYNC_TRACK_UPDATE_MARKER, UntypedQueryClient,
     cache::{ScopeLookup, Scopes},
     cache_scope::QueryAbortReason,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
@@ -18,7 +18,7 @@ use crate::{
     options_combine,
     query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
     safe_dt_dur_add,
-    utils::{KeyHash, ResetInvalidated, new_buster_id},
+    utils::{KeyHash, ResetInvalidated, new_buster_id, run_external_callbacks},
     value_with_callbacks::{GcHandle, GcValue, RefetchCbResult, RefetchHandle},
 };
 
@@ -159,7 +159,7 @@ impl<K, V> Debug for Query<K, V> {
 impl<K, V> Query<K, V> {
     pub fn new(
         client_options: QueryOptions,
-        scope_lookup: ScopeLookup,
+        untyped_client: UntypedQueryClient,
         query_scope_info: &QueryScopeInfo,
         query_scope_info_for_new_query: QueryScopeQueryInfo<K>,
         key_hash: KeyHash,
@@ -178,6 +178,7 @@ impl<K, V> Query<K, V> {
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
+        let scope_lookup = untyped_client.scope_lookup;
         let cache_key = query_scope_info.cache_key;
         let combined_options = options_combine(client_options, scope_options);
         let active_resources =
@@ -278,9 +279,7 @@ impl<K, V> Query<K, V> {
                     }
                 }
                 drop(scopes);
-                for cb in cbs_external {
-                    cb();
-                }
+                run_external_callbacks(untyped_client, cbs_external);
                 result
             })
                 as Box<dyn Fn() -> RefetchCbResult>)))

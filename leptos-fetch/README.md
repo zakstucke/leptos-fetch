@@ -20,6 +20,7 @@ LF provides:
 - Optimistic updates
 - Debugging tools
 - Optional resources
+- Managed flexible pagination
 - Declarative query interaction as a supplement to leptos resources
 - In `ssr`, custom stream encoding at a global level
 
@@ -34,16 +35,25 @@ With a resource, you have to manually lift it to a higher scope if you want to p
 LF also allows you to interact declaratively with queries outside resources, subscribe to changes, and automatically update active resources where applicable.
 
 ## Table of Contents
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
+  - [Feature Flags](#feature-flags)
+  - [Version compatibility for Leptos and LF](#version-compatibility-for-leptos-and-lf)
+  - [Installation](#installation-1)
 - [Quick Start](#quick-start)
 - [Devtools](#devtools)
 - [Query Options](#query-options)
-- [Declarative Query Interactions](#declarative-query-management)
+- [Declarative Query Interactions](#declarative-query-interactions)
+  - [Query Invalidation](#query-invalidation)
 - [Linked Invalidation](#linked-invalidation)
 - [Subscriptions](#subscriptions)
-- [Thread Local & Threadsafe Variants](#thread-local-and-threadsafe-variants)
-- [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
-- [Pagination & Infinite Queries](#pagination-and-infinite-queries)
+- [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Custom Streaming Codecs](#custom-streaming-codecs)
+- [Paginated Query Scopes](#paginated-query-scopes)
+    - [Basic Usage](#basic-usage)
+      - [Creating a Paginated Scope](#creating-a-paginated-scope)
+      - [Fetching Pages](#fetching-pages)
+    - [Complete Example](#complete-example)
 
 ## Installation
 
@@ -357,78 +367,137 @@ QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
 let client: MyQueryClient = expect_context();
 ```
 
-## Pagination and Infinite Queries
+## Paginated Query Scopes
 
-Pagination can be achieved simply with basic primitives:
-```rust,no_run
-use leptos::prelude::*;
+Paginated query scopes enable efficient data fetching by loading data in pages whilst maintaining a shared cache across different page sizes. If the data source doesn't have fixed pages, and has a more complicated "Cursor", this is managed internally by the Paginated Query Scope, as a user you only ever need to request a page with a page size.
 
-#[derive(Clone, Debug)]
-struct Page;
+#### Basic Usage
 
-async fn get_page(page_index: usize) -> Page {
-    Page
-}
+##### Creating a Paginated Scope
 
-let client = leptos_fetch::QueryClient::new();
-
-// Initial page is 0:
-let active_page_index = RwSignal::new(0);
-
-// The resource is reactive over the active_page_index signal:
-let resource = client.local_resource(get_page, move || active_page_index.get());
-
-// Update the page to 1:
-active_page_index.set(1);
+```rust,ignore
+// Likewise on QueryScopeLocal
+let scope = QueryScope::new_paginated_with_cursor(|query_key: Key, nb_items_requested: usize, cursor: Ct| async move {
+    // Your API call here
+    let (items, next_token) = api_fn(nb_items_requested, cursor).await;
+    // items: Vec<Item>
+    // next_token: Option<Ct>
+    (items, next_token)
+});
 ```
 
-Likewise with infinite queries, the [`QueryClient::update_query_async`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async) makes it easy with a single cache key:
+The getter function receives:
+- `query_key` - Your custom key, same across all pages for this query
+- `nb_items_requested` - the number of items the getter function should try to return, it is not a problem if it cannot exactly meet this number, returning less than requested before the end of the dataset will lead to extra query calls.
+- `cursor` - Token from previous fetch, always `None` on the first page
 
-```rust,no_run
-use leptos::prelude::*;
+The getter must return:
+- `Vec<Item>` - Items for this fetch, if this is empty, it is treated as if `None` was passed as the next cursor
+- `Option<Cursor>` - Token for next fetch, `None` when no more data
 
-#[derive(Clone, Debug)]
-struct InfiniteItem(usize);
+##### Fetching Pages
 
-#[derive(Clone, Debug)]
-struct InfiniteList {
-    items: Vec<InfiniteItem>,
-    offset: usize,
-    more_available: bool,
-}
+Paginated scopes are normal scopes, they can be used in declarative queries, resources, etc.
 
-async fn get_list_items(offset: usize) -> Vec<InfiniteItem> {
-    (offset..offset + 10).map(InfiniteItem).collect()
-}
+The only difference is the key is wrapped in a `leptos_fetch::PaginatedPageKey<Key>`, to provide the `page_index: usize` and `page_size` for the request.
 
-async fn get_list_query(_key: ()) -> InfiniteList {
-    let items = get_list_items(0).await;
-    InfiniteList {
-        offset: items.len(),
-        more_available: !items.is_empty(),
-        items,
+```rust,ignore
+let result = client.fetch_query(
+    scope,
+    leptos_fetch::PaginatedPageKey {
+        key: (),        // your key of any type
+        page_index: 0,  // 0-indexed page number
+        page_size: 20,  // Items per page
+    }
+).await;
+
+match result {
+    Some((items, has_more_pages)) => {
+        // Process items
+        // has_more_pages indicates if another page exists
+    }
+    None => {
+        // Page is beyond the end of data
     }
 }
+```
 
-let client = leptos_fetch::QueryClient::new();
+#### Complete Example
 
-// Initialise the query with the first load.
-// we're not using a reactive key here for extending the list, but declarative updates instead.
-let resource = client.local_resource(get_list_query, || ());
+```rust,ignore
+async fn my_api_fn(
+    target_return_count: usize,
+    offset: Option<usize>,
+) -> (Vec<usize>, Option<usize>) {
+    const ROW_COUNT: usize = 30;
+    
+    let offset = offset.unwrap_or(0);
+    let items = (0..ROW_COUNT)
+        .skip(offset)
+        .take(target_return_count)
+        .collect::<Vec<_>>();
+    
+    let next_offset = if offset + target_return_count < ROW_COUNT {
+        Some(offset + items.len())
+    } else {
+        None
+    };
+    
+    (items, next_offset)
+}
 
-async {
-    // When wanting to load more items, update_query_async can be called declaratively to update the cached item and resource:
-    client
-        .update_query_async(get_list_query, (), async |last| {
-            if last.more_available {
-                let next_items = get_list_items(last.offset).await;
-                last.offset += next_items.len();
-                last.more_available = !next_items.is_empty();
-                last.items.extend(next_items);
-            }
-        })
-        .await;
-};
+// Create the scope
+let scope = QueryScope::new_paginated_with_cursor(|_query_key, page_size, offset| async move {
+    let (items, maybe_next_offset) = my_api_fn(page_size, offset).await;
+    (items, maybe_next_offset)
+});
+
+let client = QueryClient::new();
+
+// Fetch first page
+let (first_page, more_pages) = client
+    .fetch_query(
+        scope.clone(),
+        PaginatedPageKey {
+            key: (),
+            page_index: 0,
+            page_size: 20,
+        },
+    )
+    .await
+    .expect("First page should exist");
+
+assert_eq!(first_page, (0..20).collect::<Vec<_>>());
+assert!(more_pages);
+
+// Fetch second page
+let (second_page, more_pages) = client
+    .fetch_query(
+        scope.clone(),
+        PaginatedPageKey {
+            key: (),
+            page_index: 1,
+            page_size: 20,
+        },
+    )
+    .await
+    .expect("Second page should exist");
+
+assert_eq!(second_page, (20..30).collect::<Vec<_>>());
+assert!(!more_pages);
+
+// Requesting beyond available data returns None
+assert!(client
+    .fetch_query(
+        scope.clone(),
+        PaginatedPageKey {
+            key: (),
+            page_index: 2,
+            page_size: 20,
+        },
+    )
+    .await
+    .is_none());
 ```
 
 <!-- cargo-rdme end -->
