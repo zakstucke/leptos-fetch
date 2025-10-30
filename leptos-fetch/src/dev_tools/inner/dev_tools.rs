@@ -971,12 +971,16 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                     let key_hash = query.key_hash;
                                     let mut scopes = client.scope_lookup.scopes_mut();
                                     if let Some(scope) = scopes.get_mut(&cache_key) {
-                                        let cb = scope
+                                        let cb_scopes = scope
                                             .invalidate_queries(
                                                 vec![key_hash],
                                                 QueryAbortReason::Invalidate,
                                             );
-                                        cb(&mut scopes);
+                                        let maybe_cb_external = cb_scopes(&mut scopes);
+                                        drop(scopes);
+                                        if let Some(cb_external) = maybe_cb_external {
+                                            cb_external();
+                                        }
                                     }
                                 }
                             }

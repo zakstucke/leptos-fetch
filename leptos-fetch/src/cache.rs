@@ -16,7 +16,7 @@ use crate::{
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
-    query_scope::{QueryScopeInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     trie::Trie,
     utils::{KeyHash, OnDrop, OwnerChain, ResetInvalidated, new_buster_id, new_scope_id},
@@ -26,28 +26,40 @@ pub(crate) trait Busters: 'static {
     fn invalidate_scope(
         &mut self,
         invalidation_type: QueryAbortReason,
-    ) -> Box<dyn FnOnce(&mut Scopes)>;
+    ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>>;
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>>;
 }
 
 impl<K, V> Busters for Scope<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: DebugIfDevtoolsEnabled + 'static,
 {
     fn invalidate_scope(
         &mut self,
         invalidation_type: QueryAbortReason,
-    ) -> Box<dyn FnOnce(&mut Scopes)> {
-        let mut cbs = vec![];
+    ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>> {
+        let mut cbs_scopes = vec![];
         for query in self.all_queries_mut_include_pending() {
-            let cb = query.invalidate(invalidation_type);
-            cbs.push(cb);
+            let cb_scopes = query.invalidate(invalidation_type);
+            cbs_scopes.push(cb_scopes);
         }
         Box::new(move |scopes| {
-            for cb in cbs {
-                cb(scopes);
+            let mut cbs_external = vec![];
+            for cb in cbs_scopes {
+                if let Some(cb_external) = cb(scopes) {
+                    cbs_external.push(cb_external);
+                }
+            }
+            if cbs_external.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for cb in cbs_external {
+                        cb();
+                    }
+                }))
             }
         })
     }
@@ -77,7 +89,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         &mut self,
         key_hashes: Vec<KeyHash>,
         invalidation_type: QueryAbortReason,
-    ) -> Box<dyn FnOnce(&mut Scopes)>;
+    ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>>;
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -89,7 +101,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
 
 impl<K, V> ScopeTrait for Scope<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: DebugIfDevtoolsEnabled + Clone + 'static,
 {
     fn as_any(&self) -> &dyn Any {
@@ -127,17 +139,29 @@ where
         &mut self,
         key_hashes: Vec<KeyHash>,
         invalidation_type: QueryAbortReason,
-    ) -> Box<dyn FnOnce(&mut Scopes)> {
-        let mut cbs = vec![];
+    ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>> {
+        let mut cbs_scopes = vec![];
         for key_hash in key_hashes {
             if let Some(query) = self.get_mut(&key_hash) {
-                let cb = query.invalidate(invalidation_type);
-                cbs.push(cb);
+                let cb_scopes = query.invalidate(invalidation_type);
+                cbs_scopes.push(cb_scopes);
             }
         }
         Box::new(move |scopes| {
-            for cb in cbs {
-                cb(scopes);
+            let mut cbs_external = vec![];
+            for cb in cbs_scopes {
+                if let Some(cb_external) = cb(scopes) {
+                    cbs_external.push(cb_external);
+                }
+            }
+            if cbs_external.is_empty() {
+                None
+            } else {
+                Some(Box::new(move || {
+                    for cb in cbs_external {
+                        cb();
+                    }
+                }))
             }
         })
     }
@@ -327,7 +351,7 @@ impl ScopeLookup {
         cache_key: &ScopeCacheKey,
         resource_id: u64,
     ) where
-        K: DebugIfDevtoolsEnabled + 'static,
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: 'static,
     {
         if let Some(query) = self.scopes().get(cache_key).and_then(|scope_cache| {
@@ -369,7 +393,7 @@ impl ScopeLookup {
         cb: impl FnOnce(Option<&Query<K, V>>) -> T,
     ) -> T
     where
-        K: DebugIfDevtoolsEnabled + 'static,
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let guard = self.scopes();
@@ -392,7 +416,7 @@ impl ScopeLookup {
         cb: impl FnOnce(Option<&mut Scope<K, V>>, P) -> T,
     ) -> T
     where
-        K: DebugIfDevtoolsEnabled + 'static,
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let prehook_result = scopes_prehook(scopes);
@@ -427,7 +451,7 @@ impl ScopeLookup {
 
     pub fn gc_query<K, V>(&self, cache_key: &ScopeCacheKey, key_hash: &KeyHash)
     where
-        K: DebugIfDevtoolsEnabled + 'static,
+        K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + 'static,
     {
         let mut guard = self.scopes_mut();
@@ -481,7 +505,7 @@ impl ScopeLookup {
         scope_options: Option<QueryOptions>,
         maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
         query_scope_info: &QueryScopeInfo,
-        invalidation_prefix: Option<Vec<String>>,
+        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
         key: &K,
         fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
         return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
@@ -676,7 +700,7 @@ impl ScopeLookup {
                                             client_options,
                                             *self,
                                             query_scope_info,
-                                            invalidation_prefix,
+                                            query_scope_info_for_new_query(),
                                             key_hash,
                                             maybe_local_key,
                                             new_value,

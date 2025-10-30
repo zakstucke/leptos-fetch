@@ -47,6 +47,7 @@ pub use query_scope::{QueryScope, QueryScopeLocal};
 #[cfg(test)]
 mod test {
     use std::{
+        collections::HashMap,
         fmt::Debug,
         hash::Hash,
         marker::PhantomData,
@@ -273,7 +274,7 @@ mod test {
             query_scope: impl QueryScopeLocalTrait<K, V, M>,
             key: &K,
         ) where
-            K: Debug + Hash + PartialEq + Eq + 'static,
+            K: Debug + Hash + PartialEq + Eq + Clone + 'static,
             V: Debug + Clone + 'static,
         {
             match self {
@@ -1543,6 +1544,16 @@ mod test {
                 let (fetcher, fetch_calls) = default_fetcher();
                 let (client, _guard, _owner) = prep_vari!(server_ctx);
 
+                let invalidation_counts = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+
+                let fetcher = fetcher.on_invalidation({
+                    let invalidation_counts = invalidation_counts.clone();
+                    move |key| {
+                        let mut counts = invalidation_counts.lock();
+                        *counts.entry(*key).or_insert(0) += 1;
+                    }
+                });
+
                 macro_rules! check {
                     ($get_resource:expr) => {{
                         let resource = $get_resource();
@@ -1566,7 +1577,23 @@ mod test {
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
+                            assert_eq!(
+                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
+                                0
+                            );
                             invalidation_type.invalidate(&client, fetcher.clone(), &2);
+                            assert_eq!(
+                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
+                                1
+                            );
+
+                            // A second invalidation on something that's already invalid,
+                            // should not trigger the on_invalidation callback again:
+                            invalidation_type.invalidate(&client, fetcher.clone(), &2);
+                            assert_eq!(
+                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
+                                1
+                            );
 
                             // Other than clear, because it should now be stale, not gc'd,
                             // sync fns on a new resource instance should still return the value, it just means a background refresh has been triggered:
@@ -1585,6 +1612,17 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
+
+                            // Invalidation callback should repeatedly work:
+                            assert_eq!(
+                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
+                                1
+                            );
+                            invalidation_type.invalidate(&client, fetcher.clone(), &2);
+                            assert_eq!(
+                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
+                                2
+                            );
                         }
                     }};
                 }

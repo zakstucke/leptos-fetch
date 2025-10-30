@@ -30,7 +30,11 @@ pub(crate) enum QueryAbortReason {
     SsrStreamedValueOverride,
 }
 
-impl<K, V> QueryOrPending<K, V> {
+impl<K, V> QueryOrPending<K, V>
+where
+    K: Clone + 'static,
+    V: 'static,
+{
     pub fn as_query(&self) -> Option<&Query<K, V>> {
         if let QueryOrPending::Query(query) = self {
             Some(query)
@@ -58,8 +62,8 @@ impl<K, V> QueryOrPending<K, V> {
     pub fn invalidate(
         &mut self,
         invalidation_type: QueryAbortReason,
-    ) -> impl FnOnce(&mut Scopes) + 'static + use<K, V> {
-        let mut inner_cb = None;
+    ) -> impl FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>> + 'static + use<K, V> {
+        let mut inner_cb_scopes = None;
         match self {
             QueryOrPending::Pending { query_abort_tx, .. } => {
                 // Invalidate any in-flight fetch if there is still one:
@@ -68,12 +72,18 @@ impl<K, V> QueryOrPending<K, V> {
                 }
             }
             QueryOrPending::Query(query) => {
-                inner_cb = Some(query.invalidate(invalidation_type));
+                let cb_scopes = query.invalidate(invalidation_type);
+                inner_cb_scopes = Some(cb_scopes);
             }
         }
+
         move |scopes| {
-            if let Some(cb) = inner_cb {
-                cb(scopes);
+            if let Some(cb_scopes) = inner_cb_scopes {
+                let maybe_cb_external = cb_scopes(scopes);
+                #[allow(clippy::let_and_return)]
+                maybe_cb_external
+            } else {
+                None
             }
         }
     }
@@ -98,7 +108,7 @@ pub(crate) struct Scope<K: 'static, V: 'static> {
 
 impl<K, V> Scope<K, V>
 where
-    K: DebugIfDevtoolsEnabled + 'static,
+    K: DebugIfDevtoolsEnabled + Clone + 'static,
     V: 'static,
 {
     pub fn new(scope_lookup: ScopeLookup, query_scope_info: QueryScopeInfo) -> Self {
