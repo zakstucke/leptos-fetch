@@ -969,16 +969,14 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                 if let Some(query) = query.try_read_value() {
                                     let cache_key = query.cache_key;
                                     let key_hash = query.key_hash;
-                                    if let Some(scope) = client
-                                        .scope_lookup
-                                        .scopes_mut()
-                                        .get_mut(&cache_key)
-                                    {
-                                        scope
+                                    let mut scopes = client.scope_lookup.scopes_mut();
+                                    if let Some(scope) = scopes.get_mut(&cache_key) {
+                                        let cb = scope
                                             .invalidate_queries(
                                                 vec![key_hash],
                                                 QueryAbortReason::Invalidate,
                                             );
+                                        cb(&mut scopes);
                                     }
                                 }
                             }
