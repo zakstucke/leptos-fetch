@@ -2355,7 +2355,7 @@ impl UntypedQueryClient {
     where
         K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {        
+    {
         self.scope_lookup.with_cached_scope_mut::<K, V, _, _>(
             &mut self.scope_lookup.scopes_mut(),
             scope_cache_key,

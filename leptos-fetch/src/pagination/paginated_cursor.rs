@@ -209,8 +209,8 @@ macro_rules! define {
                             if let Some(metadata) = untyped_client.query_metadata::<PaginatedPageKey<Key>, Option<(Vec<PageItem>, bool)>>(
                                 scope_cache_key,
                                 &page_key,
-                            ) 
-                            && metadata.stale_or_invalidated 
+                            )
+                            && metadata.stale_or_invalidated
                             && let Some(backing_metadata) = untyped_client.query_metadata::<KeyWithItemCountRequestedUnhashed<Key>, BackingCache<PageItem, Cursor>>(
                                 backing_cache_scope.cache_key,
                                 &KeyWithItemCountRequestedUnhashed {

@@ -5,9 +5,9 @@ use std::{hash::Hash, sync::Arc};
 use leptos::prelude::*;
 
 use crate::{
+    PaginatedPageKey, QueryOptions, QueryScope, QueryScopeLocal, UntypedQueryClient,
     cache::OnScopeMissing, debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
-    query_scope::ScopeCacheKey, PaginatedPageKey, QueryOptions, QueryScope, QueryScopeLocal,
-    UntypedQueryClient,
+    query_scope::ScopeCacheKey,
 };
 
 macro_rules! define {

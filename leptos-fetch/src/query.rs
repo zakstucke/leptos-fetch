@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use leptos::{prelude::{ArcRwSignal, GetUntracked, Owner, Set}};
+use leptos::prelude::{ArcRwSignal, GetUntracked, Owner, Set};
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
