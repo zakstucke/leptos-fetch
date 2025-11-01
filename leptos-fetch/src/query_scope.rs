@@ -8,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{QueryOptions, maybe_local::MaybeLocal};
+use crate::{maybe_local::MaybeLocal, QueryOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScopeCacheKey(u64);
@@ -78,7 +78,7 @@ macro_rules! define {
             on_invalidation: Vec<Arc<dyn for<'a> Fn(&'a K) $($impl_fn_generics)*>>,
             on_gc: Vec<Arc<dyn for<'a> Fn(&'a K) $($impl_fn_generics)*>>,
             fetcher_type_id: TypeId,
-            cache_key: ScopeCacheKey,
+            pub(crate) cache_key: ScopeCacheKey,
             options: QueryOptions,
             #[cfg(any(
                 all(debug_assertions, feature = "devtools"),

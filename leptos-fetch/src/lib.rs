@@ -18,7 +18,7 @@ mod debug_if_devtools_enabled;
 mod events;
 mod maybe_local;
 mod no_reactive_diagnostics_future;
-mod paginated_cursor;
+mod pagination;
 mod query;
 mod query_client;
 mod query_maybe_key;
@@ -41,7 +41,7 @@ mod dev_tools;
 pub use dev_tools::QueryDevtools;
 
 pub use arc_local_signal::*;
-pub use paginated_cursor::*;
+pub use pagination::*;
 pub use query_client::*;
 pub use query_options::*;
 pub use query_scope::{QueryScope, QueryScopeLocal};
@@ -710,7 +710,7 @@ mod test {
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(6));
                 assert!(client.query_exists(&fetcher, key));
 
-                assert!(client.clear_query(&fetcher, key));
+                assert!(client.untyped_client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
 
                 maybe_reacts!(true, client.prefetch_query_local(&fetcher, key).await);
@@ -721,7 +721,7 @@ mod test {
                 maybe_reacts!(true, client.prefetch_query(&fetcher, key).await);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
 
-                assert!(client.clear_query(&fetcher, key));
+                assert!(client.untyped_client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
                 maybe_reacts!(
                     true,

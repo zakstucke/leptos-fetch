@@ -5,23 +5,39 @@ use std::{
 
 use leptos::prelude::{Owner, ScopedFuture, TimeoutHandle, untrack};
 
-use crate::{UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture};
+use crate::{
+    UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture,
+    query_scope::ScopeCacheKey,
+};
+
+pub(crate) fn provide_cb_contexts(
+    untyped_client: UntypedQueryClient,
+    scope_cache_key: ScopeCacheKey,
+) {
+    leptos::context::provide_context(untyped_client);
+    leptos::context::provide_context(scope_cache_key);
+}
 
 // The context which on_gc, on_invalidation etc should run in.
 pub(crate) fn run_external_callbacks(
     untyped_client: UntypedQueryClient,
+    scope_cache_key: ScopeCacheKey,
     callbacks: Vec<Box<dyn FnOnce()>>,
 ) {
-    let owner = match Owner::current() {
+    let maybe_parent_owner = Owner::current();
+    let owner = match maybe_parent_owner.as_ref() {
         Some(o) => o.child(),
         None => Owner::default(),
     };
     owner.with(|| {
-        leptos::context::provide_context(untyped_client);
+        provide_cb_contexts(untyped_client, scope_cache_key);
         for cb in callbacks {
             cb();
         }
-    })
+    });
+    if let Some(parent) = maybe_parent_owner {
+        parent.set();
+    }
 }
 
 macro_rules! defined_id_gen {
@@ -151,15 +167,21 @@ pub(crate) struct OwnerChain(Arc<Vec<Owner>>);
 /// Will run the query in a fresh child owner.
 /// The owner will contain the context of the current client.
 impl OwnerChain {
-    pub fn new(untyped_client: UntypedQueryClient, owner: Option<Owner>) -> Self {
+    pub fn new(
+        untyped_client: UntypedQueryClient,
+        scope_cache_key: ScopeCacheKey,
+        owner: Option<Owner>,
+    ) -> Self {
         let active_owner = match &owner {
             Some(o) => o.child(),
             None => Owner::default(),
         };
-
         active_owner.with(|| {
-            leptos::context::provide_context(untyped_client);
+            provide_cb_contexts(untyped_client, scope_cache_key);
         });
+        if let Some(parent) = owner.as_ref() {
+            parent.set();
+        }
 
         let mut owners = vec![active_owner];
         let mut next_owner = owner;

@@ -87,6 +87,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         key_hashes: Vec<KeyHash>,
         invalidation_type: QueryAbortReason,
     ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>>;
+    fn cache_key(&self) -> ScopeCacheKey;
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -161,6 +162,10 @@ where
                 }))
             }
         })
+    }
+
+    fn cache_key(&self) -> ScopeCacheKey {
+        self.query_scope_info.cache_key
     }
 
     #[cfg(any(
@@ -407,8 +412,8 @@ impl ScopeLookup {
     pub fn with_cached_scope_mut<K, V, T, P>(
         &self,
         scopes: &mut Scopes,
-        query_scope_info: &QueryScopeInfo,
-        create_scope_if_missing: bool,
+        scope_cache_key: ScopeCacheKey,
+        on_scope_missing: OnScopeMissing,
         mut scopes_prehook: impl FnMut(&mut Scopes) -> P,
         cb: impl FnOnce(Option<&mut Scope<K, V>>, P) -> T,
     ) -> T
@@ -417,19 +422,16 @@ impl ScopeLookup {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let prehook_result = scopes_prehook(scopes);
-        let maybe_scope = match scopes.entry(query_scope_info.cache_key) {
-            Entry::Occupied(entry) => Some(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                if create_scope_if_missing {
-                    Some(entry.insert(Box::new(Scope::<K, V>::new(
-                        *self,
-                        query_scope_info.clone(),
-                    ))))
-                } else {
-                    None
-                }
-            }
-        };
+        let maybe_scope =
+            match scopes.entry(scope_cache_key) {
+                Entry::Occupied(entry) => Some(entry.into_mut()),
+                Entry::Vacant(entry) => match on_scope_missing {
+                    OnScopeMissing::Skip => None,
+                    OnScopeMissing::Create(query_scope_info) => Some(entry.insert(Box::new(
+                        Scope::<K, V>::new(*self, query_scope_info.clone()),
+                    ))),
+                },
+            };
 
         if let Some(scope) = maybe_scope {
             cb(
@@ -481,8 +483,8 @@ impl ScopeLookup {
             futures::channel::oneshot::channel::<QueryAbortReason>();
         self.with_cached_scope_mut::<K, V, _, _>(
             &mut self.scopes_mut(),
-            query_scope_info,
-            true,
+            query_scope_info.cache_key,
+            OnScopeMissing::Create(query_scope_info),
             |_| {},
             |scope, _| {
                 let scope = scope.expect("provided a default");
@@ -495,6 +497,11 @@ impl ScopeLookup {
         );
         query_abort_rx
     }
+}
+
+pub(crate) enum OnScopeMissing<'a> {
+    Skip,
+    Create(&'a QueryScopeInfo),
 }
 
 pub(crate) struct CachedOrFetchCbInput<'a, K: 'static, V: 'static> {

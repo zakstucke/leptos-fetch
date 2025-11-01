@@ -727,7 +727,7 @@ fn ClearCache<Codec: 'static>(
         <button
             class="lq-bg-lq-input lq-text-lq-input-foreground lq-rounded-md lq-px-2 lq-py-1 lq-text-xs lq-inline-flex lq-items-center lq-gap-1 lq-border lq-border-lq-border"
             on:click=move |_| {
-                if let Some(cache_key) = maybe_cache_key.as_ref() {
+                if let Some(cache_key) = maybe_cache_key {
                     client.invalidate_query_scope_inner(cache_key);
                 } else {
                     client.invalidate_all_queries();
@@ -979,11 +979,13 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                                                 vec![key_hash],
                                                 QueryAbortReason::Invalidate,
                                             );
+                                        let cache_key = scope.cache_key();
                                         let maybe_cb_external = cb_scopes(&mut scopes);
                                         drop(scopes);
                                         if let Some(cb_external) = maybe_cb_external {
                                             run_external_callbacks(
                                                 client.untyped_client,
+                                                cache_key,
                                                 vec![cb_external],
                                             );
                                         }

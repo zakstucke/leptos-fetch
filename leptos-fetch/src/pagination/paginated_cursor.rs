@@ -1,29 +1,20 @@
 use std::time::Duration;
 use std::{hash::Hash, sync::Arc};
 
-use crate::{
-    QueryOptions, QueryScope, QueryScopeLocal, UntypedQueryClient,
-    debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
-};
+use leptos::prelude::*;
 
-/// The key for a page of a paginated query scope.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct PaginatedPageKey<Key> {
-    /// The actual query key, this should be the same across all pages.
-    pub key: Key,
-    /// The active page index, starting from 0.
-    pub page_index: usize,
-    /// The active page size, the maximum number of items per page.
-    /// The getter will continue to internally query until this many items are available, or there are no more items.
-    pub page_size: usize,
-}
+use crate::{
+    PaginatedPageKey, QueryOptions, QueryScope, QueryScopeLocal, UntypedQueryClient,
+    cache::OnScopeMissing, debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
+    query_scope::ScopeCacheKey,
+};
 
 macro_rules! define {
     ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident, $fetch_fn:ident, $sname:literal) => {
 
         impl<Key, PageItem> $name<PaginatedPageKey<Key>, Option<(Vec<PageItem>, bool)>>
         where
-            Key: DebugIfDevtoolsEnabled + Clone + Hash + 'static $($impl_fn_generics)*,
+            Key: DebugIfDevtoolsEnabled + Clone + Hash + PartialEq + 'static $($impl_fn_generics)*,
             PageItem: DebugIfDevtoolsEnabled + Clone + 'static $($impl_fn_generics)*,
         {
             /// ## Paginated Query Scopes
@@ -178,8 +169,8 @@ macro_rules! define {
                                 cursor = None;
                             }
 
-                            InfiniteBody {
-                                inner: Arc::new(InfiniteBodyInner {
+                            BackingCache {
+                                inner: Arc::new(BackingCacheInner {
                                     items: parking_lot::Mutex::new(items),
                                     cursor: parking_lot::Mutex::new(cursor),
                                     update_lock: futures::lock::Mutex::new(()),
@@ -202,11 +193,43 @@ macro_rules! define {
                         let backing_cache_scope = backing_cache_scope.clone();
                         let getter = getter.clone();
                         async move {
-                            let infinite_cache = leptos::prelude::use_context::<UntypedQueryClient>()
+                            let untyped_client = use_context::<UntypedQueryClient>()
                                 .expect(
                                     "leptos-fetch bug, UntypedQueryClient should always have been \
                                     provided to the query context internally"
-                                )
+                            );
+                            let scope_cache_key = use_context::<ScopeCacheKey>()
+                                .expect(
+                                    "leptos-fetch bug, ScopeCacheKey itself should always have been \
+                                    provided to the query context internally"
+                                );
+
+                            // If this query is reloading because it was stale, should invalidate the backing cache before reading it,
+                            // otherwise will still get back the same stale data again:
+                            if let Some(metadata) = untyped_client.query_metadata::<PaginatedPageKey<Key>, Option<(Vec<PageItem>, bool)>>(
+                                scope_cache_key,
+                                &page_key,
+                            ) 
+                            && metadata.stale_or_invalidated 
+                            && let Some(backing_metadata) = untyped_client.query_metadata::<KeyWithItemCountRequestedUnhashed<Key>, BackingCache<PageItem, Cursor>>(
+                                backing_cache_scope.cache_key,
+                                &KeyWithItemCountRequestedUnhashed {
+                                    key: page_key.key.clone(),
+                                    item_count_requested: 0, // Doesn't matter, it's not part of the hash
+                                },
+                            )
+                            && backing_metadata.updated_at <= metadata.updated_at
+                            {
+                                untyped_client.invalidate_query(
+                                    &backing_cache_scope,
+                                    KeyWithItemCountRequestedUnhashed {
+                                        key: page_key.key.clone(),
+                                        item_count_requested: 0, // Doesn't matter, it's not part of the hash
+                                    },
+                                );
+                            }
+
+                            let infinite_cache = untyped_client
                                 .$fetch_fn(
                                     backing_cache_scope,
                                     KeyWithItemCountRequestedUnhashed {
@@ -263,40 +286,64 @@ macro_rules! define {
                         }
                     }
                 })
-                // An invalidation of any page should invalidate the backing cache:
-                .on_invalidation(move |key| {
-                    let client = leptos::prelude::use_context::<UntypedQueryClient>()
+                // An invalidation or clear of any page should invalidate the backing cache:
+                .on_invalidation({
+                    let backing_cache_scope = backing_cache_scope.clone();
+                    move |key| {
+                        let untyped_client = use_context::<UntypedQueryClient>()
+                            .expect(
+                                "leptos-fetch bug, UntypedQueryClient should always have been \
+                                provided to the on_invalidation context internally"
+                            );
+                        untyped_client.invalidate_query(
+                            &backing_cache_scope,
+                            KeyWithItemCountRequestedUnhashed {
+                                key: key.key.clone(),
+                                item_count_requested: 0, // Doesn't matter, it's not part of the hash
+                            },
+                        );
+                    }
+                })
+                // If this was the last page existing now being gc'd, clear the backing cache too:
+                .on_gc(move |key| {
+                    let untyped_client = use_context::<UntypedQueryClient>()
                         .expect(
                             "leptos-fetch bug, UntypedQueryClient should always have been \
-                            provided to the on_invalidation context internally"
+                            provided to the on_gc context internally"
                         );
-                    client.invalidate_query(
-                        &backing_cache_scope,
-                        KeyWithItemCountRequestedUnhashed {
-                            key: key.key.clone(),
-                            item_count_requested: 0, // Doesn't matter, it's not part of the hash
-                        },
-                    );
+                    let scope_cache_key = use_context::<ScopeCacheKey>()
+                        .expect(
+                            "leptos-fetch bug, ScopeCacheKey itself should always have been \
+                            provided to the on_gc context internally"
+                        );
+                    let mut found_nb = 0;
+                    untyped_client
+                        .scope_lookup
+                        .with_cached_scope_mut::<PaginatedPageKey<Key>, Option<(Vec<PageItem>, bool)>, _, _>(
+                            &mut untyped_client.scope_lookup.scopes_mut(),
+                            scope_cache_key,
+                            OnScopeMissing::Skip,
+                            |_| {},
+                            |maybe_scope, _| {
+                                if let Some(scope) = maybe_scope {
+                                    for query_or_pending in scope.all_queries_mut_include_pending() {
+                                        if query_or_pending.key().value_if_safe().map(|test_key| test_key.key == key.key).unwrap_or(false) {
+                                            found_nb += 1;
+                                        }
+                                    }
+                                }
+                            },
+                        );
+                    if found_nb == 0 {
+                        untyped_client.clear_query(
+                            &backing_cache_scope,
+                            KeyWithItemCountRequestedUnhashed {
+                                key: key.key.clone(),
+                                item_count_requested: 0, // Doesn't matter, it's not part of the hash
+                            },
+                        );
+                    }
                 })
-                // TODO finish on gc and on stale
-                // .on_gc(move |key| {
-                //     let client = leptos::prelude::use_context::<UntypedQueryClient>()
-                //         .expect(
-                //             "leptos-fetch bug, UntypedQueryClient should always have been \
-                //             provided to the on_gc context internally"
-                //         );
-                //     let scope: $name<PaginatedPageKey<Key>, Option<(Vec<PageItem>, bool)>> = todo!();
-                //     // If this was the last active query, clear the backing cache too:
-                //     if client.count_active_queries_for_scope(scope) == 0 {
-                //         client.clear_query(
-                //             &backing_cache_scope,
-                //             KeyWithItemCountRequestedUnhashed {
-                //                 key: key.key.clone(),
-                //                 item_count_requested: 0, // Doesn't matter
-                //             },
-                //         );
-                //     }
-                // })
             }
         }
     };
@@ -318,12 +365,12 @@ impl<Key: Hash> Hash for KeyWithItemCountRequestedUnhashed<Key> {
 }
 
 #[derive(Debug, Clone)]
-struct InfiniteBody<Item, Cursor> {
-    inner: Arc<InfiniteBodyInner<Item, Cursor>>,
+struct BackingCache<Item, Cursor> {
+    inner: Arc<BackingCacheInner<Item, Cursor>>,
 }
 
 #[derive(Debug)]
-struct InfiniteBodyInner<Item, Cursor> {
+struct BackingCacheInner<Item, Cursor> {
     items: parking_lot::Mutex<Vec<Item>>,
     cursor: parking_lot::Mutex<Option<Cursor>>,
     update_lock: futures::lock::Mutex<()>,
@@ -334,6 +381,7 @@ mod tests {
     use any_spawner::Executor;
     use hydration_context::SsrSharedContext;
     use leptos::prelude::*;
+    use rstest::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -373,7 +421,7 @@ mod tests {
             let call_count = call_count.clone();
             move |target_return_count: usize, offset: Option<usize>| {
                 let call_count = call_count.clone();
-                call_count.fetch_add(1, Ordering::SeqCst);
+                call_count.fetch_add(1, Ordering::Relaxed);
 
                 let offset = offset.unwrap_or(0);
                 let items = (0..num_rows)
@@ -490,7 +538,7 @@ mod tests {
                     move |_key: (), _page_size, continuation| {
                         let call_count = call_count_clone.clone();
                         async move {
-                            call_count.fetch_add(1, Ordering::SeqCst);
+                            call_count.fetch_add(1, Ordering::Relaxed);
 
                             // Return only 3 items per call, even if more are requested
                             match continuation {
@@ -533,7 +581,7 @@ mod tests {
                 assert_eq!(items, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
                 assert!(has_more, "Should indicate more pages available");
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     4,
                     "Should have made 4 API calls to fill page"
                 );
@@ -555,7 +603,7 @@ mod tests {
                 assert_eq!(items, vec![10]);
                 assert!(!has_more, "No more pages");
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     4,
                     "Should not make additional calls - data already cached"
                 );
@@ -638,7 +686,7 @@ mod tests {
                     move |_key: (), page_size, continuation| {
                         let call_count = call_count_clone.clone();
                         async move {
-                            call_count.fetch_add(1, Ordering::SeqCst);
+                            call_count.fetch_add(1, Ordering::Relaxed);
 
                             let offset = continuation.unwrap_or(0);
                             let items: Vec<usize> = (offset..offset + page_size).collect();
@@ -664,7 +712,7 @@ mod tests {
                     )
                     .await;
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     1,
                     "First fetch should make 1 API call"
                 );
@@ -681,7 +729,7 @@ mod tests {
                     )
                     .await;
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     1,
                     "Should still be 1 call - cached"
                 );
@@ -698,7 +746,7 @@ mod tests {
                     )
                     .await;
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     2,
                     "Second page needs new API call"
                 );
@@ -715,7 +763,7 @@ mod tests {
                     )
                     .await;
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     2,
                     "Should still be 2 calls - first page cached"
                 );
@@ -723,9 +771,10 @@ mod tests {
             .await;
     }
 
-    /// Test linked invalidation between pages with same key
+    /// Test linked invalidation and clear between pages with same key
+    #[rstest]
     #[tokio::test]
-    async fn test_linked_invalidation() {
+    async fn test_linked_invalidation_and_clear(#[values(true, false)] clear: bool) {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -738,7 +787,7 @@ mod tests {
                     move |key: String, page_size, continuation| {
                         let v = version_clone.clone();
                         async move {
-                            let current_version = v.load(Ordering::SeqCst);
+                            let current_version = v.load(Ordering::Relaxed);
                             let offset = continuation.unwrap_or(0);
 
                             // Return different data based on version
@@ -787,9 +836,7 @@ mod tests {
                 assert_eq!(items2[0], "test_v0_10");
 
                 // Increment version to simulate data change
-                version.store(1, Ordering::SeqCst);
-
-                crate::test::tick!();
+                version.store(1, Ordering::Relaxed);
 
                 // Fetch first page again - should still be old data
                 let (items1_new, _) = client
@@ -806,12 +853,16 @@ mod tests {
 
                 assert_eq!(
                     items1_new[0], "test_v0_0",
-                    "Should have new version after invalidation"
+                    "Should have new version after invalidation/clear"
                 );
 
-                // Invalidation should lead to new data:
-                client.invalidate_query_scope(scope.clone());
-                crate::test::tick!();
+                // Invalidation/clear should lead to new data:
+                if clear {
+                    // Currently not public, but still want to check as used internally for some things:
+                    client.untyped_client.clear_query_scope(scope.clone());
+                } else {
+                    client.invalidate_query_scope(scope.clone());
+                }
 
                 // Fetch first page again - should get new data
                 let (items1_new, _) = client
@@ -828,10 +879,10 @@ mod tests {
 
                 assert_eq!(
                     items1_new[0], "test_v1_0",
-                    "Should have new version after invalidation"
+                    "Should have new version after invalidation/clear"
                 );
 
-                // Second page should also be invalidated
+                // Second page should also be invalidated/cleared
                 let (items2_new, _) = client
                     .fetch_query(
                         scope.clone(),
@@ -907,7 +958,7 @@ mod tests {
                     move |_key: (), page_size, continuation| {
                         let call_count = call_count_clone.clone();
                         async move {
-                            call_count.fetch_add(1, Ordering::SeqCst);
+                            call_count.fetch_add(1, Ordering::Relaxed);
 
                             // Add a small delay to simulate network latency
                             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -945,7 +996,7 @@ mod tests {
 
                 // Should only make 1 API call despite 5 concurrent requests
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     1,
                     "Concurrent fetches should share single API call"
                 );
@@ -968,7 +1019,7 @@ mod tests {
                     move |_key: (), page_size, continuation| {
                         let call_count = call_count_clone.clone();
                         async move {
-                            call_count.fetch_add(1, Ordering::SeqCst);
+                            call_count.fetch_add(1, Ordering::Relaxed);
 
                             let offset = continuation.unwrap_or(0);
                             let items: Vec<usize> =
@@ -996,7 +1047,7 @@ mod tests {
                     .await
                     .expect("Page should exist");
                 assert_eq!(items1.len(), 5);
-                assert_eq!(call_count.load(Ordering::SeqCst), 1);
+                assert_eq!(call_count.load(Ordering::Relaxed), 1);
 
                 // Fetch with page size 15 - should reuse cached data and fetch more
                 let (items2, _) = client
@@ -1012,7 +1063,7 @@ mod tests {
                     .expect("Page should exist");
                 assert_eq!(items2.len(), 15);
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     2,
                     "Should fetch more data for larger page"
                 );
@@ -1031,11 +1082,165 @@ mod tests {
                     .expect("Page should exist");
                 assert_eq!(items3.len(), 10);
                 assert_eq!(
-                    call_count.load(Ordering::SeqCst),
+                    call_count.load(Ordering::Relaxed),
                     2,
                     "Should use cached data, no new fetch"
                 );
             })
             .await;
+    }
+
+    /// Test that backing cache is properly managed when paginated pages expire
+    /// Tests both GC (garbage collection) and stale time scenarios
+    #[rstest]
+    #[case::gc_time(TestMode::GcTime)]
+    #[case::stale_time(TestMode::StaleTime)]
+    #[tokio::test]
+    async fn test_backing_cache_lifecycle(#[case] mode: TestMode) {
+        crate::test::identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _guard, _owner) = prep_vari!(true);
+
+                let call_count = Arc::new(AtomicUsize::new(0));
+                let call_count_clone = call_count.clone();
+
+                let scope = QueryScope::new_paginated_with_cursor(
+                    move |key: String, page_size, continuation| {
+                        let call_count = call_count_clone.clone();
+                        async move {
+                            call_count.fetch_add(1, Ordering::Relaxed);
+
+                            let offset = continuation.unwrap_or(0);
+                            let items: Vec<String> = (offset..offset + page_size)
+                                .map(|i| format!("{}_{}", key, i))
+                                .collect();
+                            let next = if offset + page_size < 30 {
+                                Some(offset + page_size)
+                            } else {
+                                None
+                            };
+                            (items, next)
+                        }
+                    },
+                )
+                .with_options(match mode {
+                    TestMode::GcTime => crate::QueryOptions::default()
+                        .with_gc_time(std::time::Duration::from_millis(100)),
+                    TestMode::StaleTime => crate::QueryOptions::default()
+                        .with_stale_time(std::time::Duration::from_millis(100)),
+                });
+
+                // Fetch first page
+                let (items, _) = client
+                    .fetch_query(
+                        scope.clone(),
+                        PaginatedPageKey {
+                            key: "test".to_string(),
+                            page_index: 0,
+                            page_size: 10,
+                        },
+                    )
+                    .await
+                    .expect("Page should exist");
+                assert_eq!(items[0], "test_0");
+                assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+                // Wait for 50ms, 50ms left till gc/stale:
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+                // Fetch second page
+                let (items, _) = client
+                    .fetch_query(
+                        scope.clone(),
+                        PaginatedPageKey {
+                            key: "test".to_string(),
+                            page_index: 1,
+                            page_size: 10,
+                        },
+                    )
+                    .await
+                    .expect("Page should exist");
+                assert_eq!(items[0], "test_10");
+                assert_eq!(call_count.load(Ordering::Relaxed), 2);
+
+                // Wait another 50ms, so the first query is stale/gc'd, but the second is valid even when gc'd because 50ms left:
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+                // Fetch first page again
+                let (items, _) = client
+                    .fetch_query(
+                        scope.clone(),
+                        PaginatedPageKey {
+                            key: "test".to_string(),
+                            page_index: 0,
+                            page_size: 10,
+                        },
+                    )
+                    .await
+                    .expect("Page should exist");
+                assert_eq!(items[0], "test_0");
+
+                // Fetch second page again
+                let (items, _) = client
+                    .fetch_query(
+                        scope.clone(),
+                        PaginatedPageKey {
+                            key: "test".to_string(),
+                            page_index: 1,
+                            page_size: 10,
+                        },
+                    )
+                    .await
+                    .expect("Page should exist");
+                assert_eq!(items[0], "test_10");
+
+                let expected_calls = match mode {
+                    TestMode::GcTime => {
+                        // GC cleared page 0, but page 1 kept backing cache alive
+                        // So page 0 refetch reuses backing cache, plus page 1 still alive so also reused
+                        2
+                    }
+                    TestMode::StaleTime => {
+                        // Stale page triggers invalidation which clears backing cache
+                        // So page 0 refetch needs new API call, but page 1 is still valid so reused
+                        3
+                    }
+                };
+                assert_eq!(call_count.load(Ordering::Relaxed), expected_calls);
+
+                // If gc, should clear the backing cache only when all pages are gc'd:
+                if matches!(mode, TestMode::GcTime) {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+                    // Now fetch again - backing cache should be gone
+                    let (items, _) = client
+                        .fetch_query(
+                            scope.clone(),
+                            PaginatedPageKey {
+                                key: "test".to_string(),
+                                page_index: 0,
+                                page_size: 10,
+                            },
+                        )
+                        .await
+                        .expect("Page should exist");
+                    assert_eq!(items[0], "test_0");
+                    assert_eq!(
+                        call_count.load(Ordering::Relaxed),
+                        3,
+                        "Backing cache should be cleared when all pages are GC'd"
+                    );
+                }
+            })
+            .await;
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestMode {
+        /// Test GC behavior: backing cache should only be cleared when all pages are GC'd
+        GcTime,
+        /// Test stale time behavior: backing cache should be invalidated when any page goes stale
+        StaleTime,
     }
 }
