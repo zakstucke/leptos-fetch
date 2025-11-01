@@ -18,6 +18,7 @@ mod debug_if_devtools_enabled;
 mod events;
 mod maybe_local;
 mod no_reactive_diagnostics_future;
+mod pagination;
 mod query;
 mod query_client;
 mod query_maybe_key;
@@ -40,6 +41,7 @@ mod dev_tools;
 pub use dev_tools::QueryDevtools;
 
 pub use arc_local_signal::*;
+pub use pagination::*;
 pub use query_client::*;
 pub use query_options::*;
 pub use query_scope::{QueryScope, QueryScopeLocal};
@@ -85,7 +87,7 @@ mod test {
     }
 
     impl MockHydrateSharedContext {
-        async fn new(ssr_ctx: Option<&SsrSharedContext>) -> Self {
+        pub async fn new(ssr_ctx: Option<&SsrSharedContext>) -> Self {
             Self {
                 id: AtomicUsize::new(0),
                 is_hydrating: AtomicBool::new(true),
@@ -203,44 +205,49 @@ mod test {
             let ssr_ctx = Arc::new(SsrSharedContext::new());
             let owner = Owner::new_root(Some(ssr_ctx.clone()));
             owner.set();
-            provide_context(ExampleCtx);
+            provide_context(crate::test::ExampleCtx);
             let client = QueryClient::new();
             (client, ssr_ctx, owner)
         }};
     }
+    pub(crate) use prep_server;
 
     macro_rules! prep_client {
         () => {{
             _ = Executor::init_tokio();
-            let owner = Owner::new_root(Some(Arc::new(MockHydrateSharedContext::new(None).await)));
+            let owner = Owner::new_root(Some(Arc::new(
+                crate::test::MockHydrateSharedContext::new(None).await,
+            )));
             owner.set();
-            provide_context(ExampleCtx);
+            provide_context(crate::test::ExampleCtx);
             let client = QueryClient::new();
             (client, owner)
         }};
         ($ssr_ctx:expr) => {{
             _ = Executor::init_tokio();
             let owner = Owner::new_root(Some(Arc::new(
-                MockHydrateSharedContext::new(Some(&$ssr_ctx)).await,
+                crate::test::MockHydrateSharedContext::new(Some(&$ssr_ctx)).await,
             )));
             owner.set();
-            provide_context(ExampleCtx);
+            provide_context(crate::test::ExampleCtx);
             let client = QueryClient::new();
             (client, owner)
         }};
     }
+    pub(crate) use prep_client;
 
     macro_rules! prep_vari {
         ($server:expr) => {
             if $server {
-                let (client, ssr_ctx, owner) = prep_server!();
+                let (client, ssr_ctx, owner) = crate::test::prep_server!();
                 (client, Some(ssr_ctx), owner)
             } else {
-                let (client, owner) = prep_client!();
+                let (client, owner) = crate::test::prep_client!();
                 (client, None, owner)
             }
         };
     }
+    pub(crate) use prep_vari;
 
     macro_rules! tick {
         () => {
@@ -250,6 +257,7 @@ mod test {
             tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         };
     }
+    pub(crate) use tick;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ResourceType {
@@ -324,7 +332,7 @@ mod test {
     }
 
     #[derive(Clone, Copy, Debug)]
-    struct ExampleCtx;
+    pub struct ExampleCtx;
 
     const DEFAULT_FETCHER_MS: u64 = 30;
     fn default_fetcher() -> (QueryScope<u64, u64>, Arc<AtomicUsize>) {
@@ -347,7 +355,7 @@ mod test {
         (QueryScope::new(fetcher_src), fetch_calls)
     }
 
-    fn identify_parking_lot_deadlocks() {
+    pub fn identify_parking_lot_deadlocks() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             std::thread::spawn(move || {
@@ -702,7 +710,7 @@ mod test {
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(6));
                 assert!(client.query_exists(&fetcher, key));
 
-                assert!(client.clear_query(&fetcher, key));
+                assert!(client.untyped_client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
 
                 maybe_reacts!(true, client.prefetch_query_local(&fetcher, key).await);
@@ -713,7 +721,7 @@ mod test {
                 maybe_reacts!(true, client.prefetch_query(&fetcher, key).await);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
 
-                assert!(client.clear_query(&fetcher, key));
+                assert!(client.untyped_client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
                 maybe_reacts!(
                     true,
@@ -1830,6 +1838,14 @@ mod test {
                     .await;
                 assert!(!client.is_key_invalid(&hierarchy_child_scope, 100));
 
+                // Should be invalidated when the hierarchy_parent_scope and vice versa, siblings should invalidate each other
+                let hierarchy_sibling_scope =
+                    QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
+                client
+                    .fetch_query(hierarchy_sibling_scope.clone(), &())
+                    .await;
+                assert!(!client.is_key_invalid(&hierarchy_sibling_scope, ()));
+
                 client.invalidate_query(&hierarchy_parent_scope, ());
                 tick!();
                 assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
@@ -1861,6 +1877,103 @@ mod test {
                 assert!(!client.is_key_invalid(&hierarchy_parent_scope, ()));
                 assert!(!client.is_key_invalid(&fetcher, 2));
                 assert!(client.is_key_invalid(&hierarchy_child_scope, 100));
+
+                // Sibling should also invalidate the others:
+                // Reset:
+                client.fetch_query(&hierarchy_parent_scope, &()).await;
+                client.fetch_query(&fetcher, &2).await;
+                client
+                    .fetch_query(hierarchy_sibling_scope.clone(), &())
+                    .await;
+                client.invalidate_query(&hierarchy_sibling_scope, ());
+                tick!();
+                assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
+                assert!(client.is_key_invalid(&hierarchy_sibling_scope, ()));
+
+                // Repeat the other direction to be sure:
+                // Reset:
+                client.fetch_query(&hierarchy_parent_scope, &()).await;
+                client.fetch_query(&fetcher, &2).await;
+                client
+                    .fetch_query(hierarchy_sibling_scope.clone(), &())
+                    .await;
+                client.invalidate_query(&hierarchy_parent_scope, ());
+                tick!();
+                assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
+                assert!(client.is_key_invalid(&hierarchy_sibling_scope, ()));
+            })
+            .await;
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_same_key_invalidation(#[values(false, true)] server_ctx: bool) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _guard, _owner) = prep_vari!(server_ctx);
+
+                // Create two different query scopes that both use ["foo"] as their invalidation key
+                let scope_a = QueryScope::new(async |id: usize| format!("result_a_{}", id))
+                    .with_invalidation_link(|_id: &usize| ["foo"]);
+
+                let scope_b = QueryScope::new(async |id: usize| format!("result_b_{}", id))
+                    .with_invalidation_link(|_id: &usize| ["foo"]);
+
+                // Fetch both queries with different IDs
+                client.fetch_query(&scope_a, &1).await;
+                client.fetch_query(&scope_b, &2).await;
+
+                // Verify both are valid
+                assert!(!client.is_key_invalid(&scope_a, 1));
+                assert!(!client.is_key_invalid(&scope_b, 2));
+
+                // Invalidate scope_a with its key - this should invalidate both
+                // since they share the same invalidation key ["foo"]
+                client.invalidate_query(&scope_a, 1);
+                tick!();
+
+                // Both should now be invalid because they share ["foo"]
+                assert!(client.is_key_invalid(&scope_a, 1));
+                assert!(client.is_key_invalid(&scope_b, 2));
+
+                // Reset and test the other direction
+                client.fetch_query(&scope_a, &1).await;
+                client.fetch_query(&scope_b, &2).await;
+
+                assert!(!client.is_key_invalid(&scope_a, 1));
+                assert!(!client.is_key_invalid(&scope_b, 2));
+
+                // Invalidate scope_b - should also invalidate scope_a
+                client.invalidate_query(&scope_b, 2);
+                tick!();
+
+                assert!(client.is_key_invalid(&scope_a, 1));
+                assert!(client.is_key_invalid(&scope_b, 2));
+
+                // Also test with a third scope that has a different key
+                let scope_c = QueryScope::new(async |id: usize| format!("result_c_{}", id))
+                    .with_invalidation_link(|_id: &usize| ["bar"]);
+
+                client.fetch_query(&scope_a, &1).await;
+                client.fetch_query(&scope_b, &2).await;
+                client.fetch_query(&scope_c, &3).await;
+
+                // Invalidating scope_c should NOT affect scope_a or scope_b
+                client.invalidate_query(&scope_c, 3);
+                tick!();
+
+                assert!(!client.is_key_invalid(&scope_a, 1));
+                assert!(!client.is_key_invalid(&scope_b, 2));
+                assert!(client.is_key_invalid(&scope_c, 3));
+
+                // But invalidating scope_a should still invalidate scope_b (but not scope_c)
+                client.invalidate_query(&scope_a, 1);
+                tick!();
+
+                assert!(client.is_key_invalid(&scope_a, 1));
+                assert!(client.is_key_invalid(&scope_b, 2));
+                assert!(client.is_key_invalid(&scope_c, 3)); // Still invalid from before
             })
             .await;
     }

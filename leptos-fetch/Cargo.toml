@@ -45,6 +45,6 @@ tracing.workspace = true
 any_spawner = { workspace = true, features = ["tokio"] }
 codee = { workspace = true, features = ["msgpack_serde"] }
 hydration_context.workspace = true
-rstest = "0.25"
+rstest = "0.26"
 tokio = { version = "1", features = ["full"] }
 parking_lot = { workspace = true, features = ["deadlock_detection"] }
