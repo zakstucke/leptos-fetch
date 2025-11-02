@@ -441,7 +441,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_paginated() {
+    async fn test_paginated_cursor() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -524,7 +524,7 @@ mod tests {
 
     /// Test that the pagination logic keeps calling the API until page_size items are available
     #[tokio::test]
-    async fn test_fills_page_size_with_multiple_calls() {
+    async fn test_paginated_cursor_fills_page_size_with_multiple_calls() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -673,7 +673,7 @@ mod tests {
 
     /// Test that API calls are cached properly and not repeated unnecessarily
     #[tokio::test]
-    async fn test_no_unnecessary_api_calls() {
+    async fn test_paginated_cursor_no_unnecessary_api_calls() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -774,7 +774,9 @@ mod tests {
     /// Test linked invalidation and clear between pages with same key
     #[rstest]
     #[tokio::test]
-    async fn test_linked_invalidation_and_clear(#[values(true, false)] clear: bool) {
+    async fn test_paginated_cursor_linked_invalidation_and_clear(
+        #[values(true, false)] clear: bool,
+    ) {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -905,7 +907,7 @@ mod tests {
 
     /// Test that empty responses are handled correctly
     #[tokio::test]
-    async fn test_empty_response_handling() {
+    async fn test_paginated_cursor_empty_response_handling() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -945,7 +947,7 @@ mod tests {
 
     /// Test concurrent page fetches don't cause duplicate API calls
     #[tokio::test]
-    async fn test_concurrent_fetches() {
+    async fn test_paginated_cursor_concurrent_fetches() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -1006,7 +1008,7 @@ mod tests {
 
     /// Test different page sizes work correctly with shared cache
     #[tokio::test]
-    async fn test_different_page_sizes() {
+    async fn test_paginated_cursor_different_page_sizes() {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -1096,7 +1098,7 @@ mod tests {
     #[case::gc_time(TestMode::GcTime)]
     #[case::stale_time(TestMode::StaleTime)]
     #[tokio::test]
-    async fn test_backing_cache_lifecycle(#[case] mode: TestMode) {
+    async fn test_paginated_cursor_backing_cache_lifecycle(#[case] mode: TestMode) {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
