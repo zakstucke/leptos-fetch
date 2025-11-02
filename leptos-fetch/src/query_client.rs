@@ -2012,12 +2012,12 @@ impl<Codec: 'static> QueryClient<Codec> {
     }
 
     #[cfg(test)]
-    pub(crate) fn size(&self) -> usize {
+    pub(crate) fn total_cached_queries(&self) -> usize {
         self.untyped_client
             .scope_lookup
             .scopes()
             .values()
-            .map(|scope| scope.size())
+            .map(|scope| scope.total_cached_queries())
             .sum()
     }
 

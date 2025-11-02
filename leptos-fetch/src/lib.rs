@@ -16,6 +16,7 @@ mod debug_if_devtools_enabled;
     feature = "devtools-always"
 ))]
 mod events;
+mod global;
 mod maybe_local;
 mod no_reactive_diagnostics_future;
 mod pagination;
@@ -70,7 +71,7 @@ mod test {
 
     use rstest::*;
 
-    use crate::{query_scope::QueryScopeLocalTrait, utils::OnDrop};
+    use crate::{global::does_scope_id_exist, query_scope::QueryScopeLocalTrait, utils::OnDrop};
 
     use super::*;
 
@@ -532,6 +533,25 @@ mod test {
             .await;
     }
 
+    /// Confirm scopes cleanup when the outermost owner is cleaned up:
+    #[rstest]
+    #[tokio::test]
+    async fn test_scope_cleanup() {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _guard, _owner) = prep_vari!(false);
+                assert!(does_scope_id_exist(
+                    client.untyped_client.scope_lookup.scope_id
+                ));
+                drop(_owner);
+                assert!(!does_scope_id_exist(
+                    client.untyped_client.scope_lookup.scope_id
+                ));
+            })
+            .await;
+    }
+
     // Good example test, nothing new in here though:
     #[rstest]
     #[tokio::test]
@@ -717,7 +737,7 @@ mod test {
 
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
                 client.clear();
-                assert_eq!(client.size(), 0);
+                assert_eq!(client.total_cached_queries(), 0);
                 maybe_reacts!(true, client.prefetch_query(&fetcher, key).await);
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(2));
 
@@ -729,7 +749,7 @@ mod test {
                 );
                 assert!(client.query_exists(&fetcher, key));
                 client.clear();
-                assert_eq!(client.size(), 0);
+                assert_eq!(client.total_cached_queries(), 0);
                 maybe_reacts!(true, assert_eq!(client.fetch_query(&fetcher, key).await, 2));
 
                 // update_query_async/update_query_async_local:
@@ -883,12 +903,12 @@ mod test {
                             with_tmp_owner! {{
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
 
                                 // less than refetch_time shouldn't have recalled:
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
                             }}
 
                             // hit refetch time with no active resources shouldn't have refetched:
@@ -1071,14 +1091,14 @@ mod test {
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
 
                                 // < gc_time shouldn't have cleaned up:
                                 tick!();
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
                                 assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
@@ -1088,7 +1108,7 @@ mod test {
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
                                 assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
@@ -1103,13 +1123,13 @@ mod test {
                                 assert_eq!($get_resource().await, 4);
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
                                 assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 0);
                             }}
 
                             // >gc_time and no resources should now have been cleaned up, causing a new fetch:
                             with_tmp_owner! {{
-                                assert_eq!(client.size(), 1);
+                                assert_eq!(client.total_cached_queries(), 1);
 
                                 assert_eq!(subscribed.get_untracked(), Some(4));
                                 tokio::time::sleep(tokio::time::Duration::from_millis(GC_TIME_MS)).await;
@@ -1124,7 +1144,7 @@ mod test {
                             // Final cleanup:
                             tokio::time::sleep(tokio::time::Duration::from_millis(GC_TIME_MS)).await;
                             tick!();
-                            assert_eq!(client.size(), 0);
+                            assert_eq!(client.total_cached_queries(), 0);
                             assert_eq!(subscribed.get_untracked(), None);
                             assert_eq!(*gc_counts.lock().get(&2).unwrap_or(&0), 2);
                         }
@@ -1351,7 +1371,7 @@ mod test {
                             assert_eq!(client.subscriber_count(), 0);
 
                             client.clear();
-                            assert_eq!(client.size(), 0);
+                            assert_eq!(client.total_cached_queries(), 0);
 
                             // Make sure subscriptions start in true state if in the middle of loading:
                             tokio::join!(

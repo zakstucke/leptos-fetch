@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use leptos::prelude::TimeoutHandle;
 use parking_lot::Mutex;
-use send_wrapper::SendWrapper;
 
 use crate::maybe_local::MaybeLocal;
 
@@ -60,7 +59,10 @@ pub(crate) enum GcHandle {
 
 impl GcHandle {
     // gc_cb returns true if gc happened, false if should call again after same delay.
-    pub fn new(gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>, duration: Duration) -> Self {
+    pub fn new(
+        gc_cb: Option<Arc<Box<dyn Fn() -> bool + Send + Sync>>>,
+        duration: Duration,
+    ) -> Self {
         if let Some(gc_cb) = gc_cb {
             #[cfg(any(not(test), target_arch = "wasm32"))]
             {
@@ -90,14 +92,14 @@ impl GcHandle {
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
             {
-                // Just for testing, tokio tests are single threaded so SendWrapper is fine:
+                // Just for testing:
                 // (because not sure why but spawn_local hangs.)
-                let handle = tokio::task::spawn(SendWrapper::new(async move {
+                let handle = tokio::task::spawn(async move {
                     tokio::time::sleep(duration).await;
                     while !gc_cb() {
                         tokio::time::sleep(duration).await;
                     }
-                }));
+                });
                 GcHandle::Tokio(handle)
             }
         } else {
@@ -137,7 +139,7 @@ pub(crate) enum RefetchHandle {
 
 impl RefetchHandle {
     pub fn new(
-        refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>>,
+        refetch_cb: Option<Arc<Box<dyn Fn() -> RefetchCbResult + Send + Sync>>>,
         duration: Option<Duration>,
     ) -> Self {
         if let Some(refetch_cb) = refetch_cb {
@@ -150,7 +152,7 @@ impl RefetchHandle {
                 let handle = Arc::new(Mutex::new(None));
                 fn call(
                     handle: Arc<Mutex<Option<TimeoutHandle>>>,
-                    refetch_cb: Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>,
+                    refetch_cb: Arc<Box<dyn Fn() -> RefetchCbResult + Send + Sync>>,
                     duration: Duration,
                 ) -> TimeoutHandle {
                     safe_set_timeout(
@@ -170,9 +172,9 @@ impl RefetchHandle {
             }
             #[cfg(all(test, not(target_arch = "wasm32")))]
             {
-                // Just for testing, tokio tests are single threaded so SendWrapper is fine:
+                // Just for testing:
                 // (because not sure why but spawn_local hangs.)
-                let handle = tokio::task::spawn(SendWrapper::new(async move {
+                let handle = tokio::task::spawn(async move {
                     loop {
                         tokio::time::sleep(duration).await;
                         match refetch_cb() {
@@ -180,7 +182,7 @@ impl RefetchHandle {
                             RefetchCbResult::PostponedWhilstRefetchDisabled => {}
                         }
                     }
-                }));
+                });
                 RefetchHandle::Tokio(handle)
             }
         } else {
