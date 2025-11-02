@@ -30,7 +30,7 @@ use crate::{
     cache_scope::{QueryAbortReason, QueryOrPending},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
-    query::{DynQuery, Query},
+    query::Query,
     query_maybe_key::QueryMaybeKey,
     query_scope::{
         QueryScopeInfo, QueryScopeLocalTrait, QueryScopeQueryInfo, QueryScopeTrait, ScopeCacheKey,
@@ -2366,7 +2366,7 @@ impl UntypedQueryClient {
                     && let Some(cached) = scope.get(&KeyHash::new(key.borrow()))
                 {
                     return Some(QueryMetadata {
-                        updated_at: cached.updated_at(),
+                        updated_at: cached.updated_at,
                         stale_or_invalidated: cached.stale_or_invalidated(),
                     });
                 }
