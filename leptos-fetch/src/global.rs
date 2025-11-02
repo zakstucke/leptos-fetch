@@ -1,7 +1,3 @@
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
 use std::{collections::HashMap, sync::LazyLock};
 
 use crate::{
@@ -9,7 +5,7 @@ use crate::{
     query_scope::ScopeCacheKey,
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{KeyHash, new_scope_id},
+    utils::{new_scope_id, KeyHash},
 };
 
 pub(crate) static GLOBAL_SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
