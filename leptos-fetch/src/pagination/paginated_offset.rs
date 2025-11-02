@@ -18,19 +18,55 @@ macro_rules! define {
             Key: DebugIfDevtoolsEnabled + Clone + Hash + PartialEq + 'static $($impl_fn_generics)*,
             PageItem: DebugIfDevtoolsEnabled + Clone + 'static $($impl_fn_generics)*,
         {
-            /// ## Paginated Query Scopes with Offset
+            /// Create an offset-based paginated query scope.
             ///
-            /// Similar to cursor-based pagination, but uses numeric offsets allowing direct page jumps.
-            /// Returns total item count when known, enabling page count calculations.
+            /// Preferred when your API supports numeric offsets. Enables jumping to any page without
+            /// loading intermediate pages and can return total item count for page calculations.
             ///
-            /// The getter function receives:
-            /// - `query_key` - Your custom key
-            /// - `nb_items_requested` - Number of items to return
-            /// - `offset` - Starting position (u64)
+            /// # Arguments
+            ///
+            /// The getter receives:
+            /// - `query_key: Key` - Your custom key, same across all pages
+            /// - `nb_items_requested: usize` - Target number of items to return
+            /// - `offset: u64` - Starting position/offset for this fetch
             ///
             /// The getter must return:
-            /// - `Vec<Item>` - Items for this fetch
-            /// - `Option<u64>` - Total items if known
+            /// - `Vec<Item>` - Items for this page
+            /// - `Option<u64>` - Total item count if known (enables page count calculations)
+            ///
+            /// # Example
+            ///
+            /// ```rust,ignore
+            /// use leptos_fetch::{QueryScope, PaginatedPageKey};
+            ///
+            /// // Create paginated scope with offset-based API
+            /// let scope = QueryScope::new_paginated_with_offset(
+            ///     |_key: (), nb_items, offset| async move {
+            ///         // Call your API with offset and limit
+            ///         let (items, total) = fetch_from_api(offset, nb_items).await;
+            ///         (items, Some(total))
+            ///     }
+            /// );
+            ///
+            /// // Fetch page 0
+            /// let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+            ///     key: (),
+            ///     page_index: 0,
+            ///     page_size: 20,
+            /// }).await.expect("Page exists");
+            ///
+            /// // Jump directly to page 10 (no need to load pages 1-9)
+            /// let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+            ///     key: (),
+            ///     page_index: 10,
+            ///     page_size: 20,
+            /// }).await.expect("Page exists");
+            ///
+            /// // Calculate total pages from returned total count
+            /// if let Some(total_items) = total {
+            ///     let total_pages = (total_items as f64 / 20.0).ceil() as u64;
+            /// }
+            /// ```
             pub fn new_paginated_with_offset<Fut>(
                 getter: impl Fn(Key, usize, u64) -> Fut + 'static $($impl_fn_generics)*,
             ) -> $name<PaginatedPageKey<Key>, Option<(Vec<PageItem>, Option<u64>)>>

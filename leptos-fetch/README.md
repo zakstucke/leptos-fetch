@@ -50,10 +50,9 @@ LF also allows you to interact declaratively with queries outside resources, sub
 - [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
 - [Custom Streaming Codecs](#custom-streaming-codecs)
 - [Paginated Query Scopes](#paginated-query-scopes)
-    - [Basic Usage](#basic-usage)
-      - [Creating a Paginated Scope](#creating-a-paginated-scope)
-      - [Fetching Pages](#fetching-pages)
-    - [Complete Example](#complete-example)
+  - [Offset-based Pagination](#offset-based-pagination)
+  - [Cursor-based Pagination](#cursor-based-pagination)
+  - [Common Features](#common-features)
 
 ## Installation
 
@@ -369,135 +368,80 @@ let client: MyQueryClient = expect_context();
 
 ## Paginated Query Scopes
 
-Paginated query scopes enable efficient data fetching by loading data in pages whilst maintaining a shared cache across different page sizes. If the data source doesn't have fixed pages, and has a more complicated "Cursor", this is managed internally by the Paginated Query Scope, as a user you only ever need to request a page with a page size.
+Paginated query scopes enable efficient data fetching by loading data in pages whilst maintaining a shared cache across different page sizes. LF provides two pagination strategies:
 
-#### Basic Usage
+**Offset-based pagination** (`new_paginated_with_offset`) - Preferred when your API supports it:
+- Supports jumping directly to any page (no need to load intermediate pages)
+- Returns total item count (if known), enabling total page count calculations
+- Better UX for traditional page-based navigation
 
-##### Creating a Paginated Scope
+**Cursor-based pagination** (`new_paginated_with_cursor`) - For APIs without offset support:
+- Works with continuation tokens/cursors
+- Good for infinite scroll internal API patterns
+- Acts as an infinite API backing to a paginated user-facing API
+
+Both methods internally manage the complexities - you only request pages with a page size, and LF handles caching and data fetching.
+
+### Offset-based Pagination
 
 ```rust,ignore
-// Likewise on QueryScopeLocal
-let scope = QueryScope::new_paginated_with_cursor(|query_key: Key, nb_items_requested: usize, cursor: Ct| async move {
-    // Your API call here
-    let (items, next_token) = api_fn(nb_items_requested, cursor).await;
-    // items: Vec<Item>
-    // next_token: Option<Ct>
-    (items, next_token)
+let scope = QueryScope::new_paginated_with_offset(|key, nb_items: usize, offset: u64| async move {
+    // Your API call - fetch nb_items starting at offset
+    let (items, total_items) = api_fetch(offset, nb_items).await;
+    (items, total_items)  // total_items: Option<u64>
 });
-```
 
-The getter function receives:
-- `query_key` - Your custom key, same across all pages for this query
-- `nb_items_requested` - the number of items the getter function should try to return, it is not a problem if it cannot exactly meet this number, returning less than requested before the end of the dataset will lead to extra query calls.
-- `cursor` - Token from previous fetch, always `None` on the first page
+// Fetch page 0
+let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 0,
+    page_size: 20,
+}).await.expect("Page exists");
 
-The getter must return:
-- `Vec<Item>` - Items for this fetch, if this is empty, it is treated as if `None` was passed as the next cursor
-- `Option<Cursor>` - Token for next fetch, `None` when no more data
+// Jump directly to page 10 (no need to load pages 1-9)
+let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 10,
+    page_size: 20,
+}).await.expect("Page exists");
 
-##### Fetching Pages
-
-Paginated scopes are normal scopes, they can be used in declarative queries, resources, etc.
-
-The only difference is the key is wrapped in a `leptos_fetch::PaginatedPageKey<Key>`, to provide the `page_index: usize` and `page_size` for the request.
-
-```rust,ignore
-let result = client.fetch_query(
-    scope,
-    leptos_fetch::PaginatedPageKey {
-        key: (),        // your key of any type
-        page_index: 0,  // 0-indexed page number
-        page_size: 20,  // Items per page
-    }
-).await;
-
-match result {
-    Some((items, has_more_pages)) => {
-        // Process items
-        // has_more_pages indicates if another page exists
-    }
-    None => {
-        // Page is beyond the end of data
-    }
+// Calculate total pages client-side
+if let Some(total_items) = total {
+    let total_pages = (total_items as f64 / 20.0).ceil() as u64;
 }
 ```
 
-#### Complete Example
+### Cursor-based Pagination
 
 ```rust,ignore
-async fn my_api_fn(
-    target_return_count: usize,
-    offset: Option<usize>,
-) -> (Vec<usize>, Option<usize>) {
-    const ROW_COUNT: usize = 30;
-    
-    let offset = offset.unwrap_or(0);
-    let items = (0..ROW_COUNT)
-        .skip(offset)
-        .take(target_return_count)
-        .collect::<Vec<_>>();
-    
-    let next_offset = if offset + target_return_count < ROW_COUNT {
-        Some(offset + items.len())
-    } else {
-        None
-    };
-    
-    (items, next_offset)
-}
-
-// Create the scope
-let scope = QueryScope::new_paginated_with_cursor(|_query_key, page_size, offset| async move {
-    let (items, maybe_next_offset) = my_api_fn(page_size, offset).await;
-    (items, maybe_next_offset)
+let scope = QueryScope::new_paginated_with_cursor(|key, nb_items: usize, cursor: Option<Ct>| async move {
+    // Your API call - fetch nb_items using cursor
+    let (items, next_cursor) = api_fetch(cursor, nb_items).await;
+    (items, next_cursor)  // next_cursor: Option<Ct>, None when no more data
 });
 
-let client = QueryClient::new();
+// Fetch pages sequentially, if requesting page 10, will have to load the data internally for pages 1-9
+let (page0, has_more) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 0,
+    page_size: 20,
+}).await.expect("Page exists");
 
-// Fetch first page
-let (first_page, more_pages) = client
-    .fetch_query(
-        scope.clone(),
-        PaginatedPageKey {
-            key: (),
-            page_index: 0,
-            page_size: 20,
-        },
-    )
-    .await
-    .expect("First page should exist");
+let (page1, has_more) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 1,
+    page_size: 20,
+}).await.expect("Page exists");
 
-assert_eq!(first_page, (0..20).collect::<Vec<_>>());
-assert!(more_pages);
-
-// Fetch second page
-let (second_page, more_pages) = client
-    .fetch_query(
-        scope.clone(),
-        PaginatedPageKey {
-            key: (),
-            page_index: 1,
-            page_size: 20,
-        },
-    )
-    .await
-    .expect("Second page should exist");
-
-assert_eq!(second_page, (20..30).collect::<Vec<_>>());
-assert!(!more_pages);
-
-// Requesting beyond available data returns None
-assert!(client
-    .fetch_query(
-        scope.clone(),
-        PaginatedPageKey {
-            key: (),
-            page_index: 2,
-            page_size: 20,
-        },
-    )
-    .await
-    .is_none());
+// has_more: bool indicates if another page exists
 ```
+
+### Common Features
+
+Both pagination types:
+- Use `PaginatedPageKey<Key>` to request pages by `page_index` and `page_size`
+- Return `None` when requesting a page beyond available data
+- Share cached data across different page sizes
+- Support all standard query features (invalidation, stale times, etc.)
 
 <!-- cargo-rdme end -->

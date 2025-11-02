@@ -17,137 +17,51 @@ macro_rules! define {
             Key: DebugIfDevtoolsEnabled + Clone + Hash + PartialEq + 'static $($impl_fn_generics)*,
             PageItem: DebugIfDevtoolsEnabled + Clone + 'static $($impl_fn_generics)*,
         {
-            /// ## Paginated Query Scopes
+            /// Create a cursor-based paginated query scope.
             ///
-            /// Paginated query scopes enable efficient data fetching by loading data in pages whilst maintaining a shared cache across different page sizes. If the data source doesn't have fixed pages, and has a more complicated "Continuation Token", this is managed internally by the Paginated Query Scope, as a user you only ever need to request a page with a page size.
+            /// Use this when your API uses continuation tokens/cursors rather than numeric offsets.
+            /// Good for infinite scroll patterns or when your API doesn't support offset-based pagination.
             ///
-            /// #### Basic Usage
+            /// # Arguments
             ///
-            /// ##### Creating a Paginated Scope
-            ///
-            /// ```rust,ignore
-            /// // Likewise on QueryScopeLocal
-            /// let scope = QueryScope::new_paginated_with_cursor(|query_key: Key, nb_items_requested: usize, cursor: Ct| async move {
-            ///     // Your API call here
-            ///     let (items, next_token) = api_fn(nb_items_requested, cursor).await;
-            ///     // items: Vec<Item>
-            ///     // next_token: Option<Ct>
-            ///     (items, next_token)
-            /// });
-            /// ```
-            ///
-            /// The getter function receives:
-            /// - `query_key` - Your custom key, same across all pages for this query
-            /// - `nb_items_requested` - the number of items the getter function should try to return, it is not a problem if it cannot exactly meet this number, returning less than requested before the end of the dataset will lead to extra query calls.
-            /// - `cursor` - Token from previous fetch, always `None` on the first page
+            /// The getter receives:
+            /// - `query_key: Key` - Your custom key, same across all pages
+            /// - `nb_items_requested: usize` - Target number of items to return, will call again if not enough items returned
+            /// - `cursor: Option<Cursor>` - Cursor from previous fetch, `None` on first page
             ///
             /// The getter must return:
-            /// - `Vec<Item>` - Items for this fetch, if this is empty, it is treated as if `None` was passed as the next cursor
-            /// - `Option<Cursor>` - Token for next fetch, `None` when no more data
+            /// - `Vec<Item>` - Items for this page
+            /// - `Option<Cursor>` - Next cursor token, `None` when no more data
             ///
-            /// ##### Fetching Pages
-            ///
-            /// Paginated scopes are normal scopes, they can be used in declarative queries, resources, etc.
-            ///
-            /// The only difference is the key is wrapped in a `leptos_fetch::PaginatedPageKey<Key>`, to provide the `page_index: usize` and `page_size` for the request.
+            /// # Example
             ///
             /// ```rust,ignore
-            /// let result = client.fetch_query(
-            ///     scope,
-            ///     leptos_fetch::PaginatedPageKey {
-            ///         key: (),        // your key of any type
-            ///         page_index: 0,  // 0-indexed page number
-            ///         page_size: 20,  // Items per page
-            ///     }
-            /// ).await;
+            /// use leptos_fetch::{QueryScope, PaginatedPageKey};
             ///
-            /// match result {
-            ///     Some((items, has_more_pages)) => {
-            ///         // Process items
-            ///         // has_more_pages indicates if another page exists
+            /// // Create paginated scope with cursor-based API
+            /// let scope = QueryScope::new_paginated_with_cursor(
+            ///     |_key: (), nb_items, cursor: Option<String>| async move {
+            ///         // Call your API with cursor token
+            ///         let (items, next_cursor) = fetch_from_api(cursor, nb_items).await;
+            ///         (items, next_cursor)
             ///     }
-            ///     None => {
-            ///         // Page is beyond the end of data
-            ///     }
+            /// );
+            ///
+            /// // Use like any other scope - fetch pages with PaginatedPageKey
+            /// let (items, has_more) = client.fetch_query(scope, PaginatedPageKey {
+            ///     key: (),
+            ///     page_index: 0,
+            ///     page_size: 20,
+            /// }).await.expect("Page exists");
+            ///
+            /// // has_more: bool indicates if another page is available
+            /// if has_more {
+            ///     let (next_items, _) = client.fetch_query(scope, PaginatedPageKey {
+            ///         key: (),
+            ///         page_index: 1,
+            ///         page_size: 20,
+            ///     }).await.expect("Next page exists");
             /// }
-            /// ```
-            ///
-            /// #### Complete Example
-            ///
-            /// ```rust,ignore
-            /// async fn my_api_fn(
-            ///     target_return_count: usize,
-            ///     offset: Option<usize>,
-            /// ) -> (Vec<usize>, Option<usize>) {
-            ///     const ROW_COUNT: usize = 30;
-            //
-            ///     let offset = offset.unwrap_or(0);
-            ///     let items = (0..ROW_COUNT)
-            ///         .skip(offset)
-            ///         .take(target_return_count)
-            ///         .collect::<Vec<_>>();
-            ///
-            ///     let next_offset = if offset + target_return_count < ROW_COUNT {
-            ///         Some(offset + items.len())
-            ///     } else {
-            ///         None
-            ///     };
-            ///
-            ///     (items, next_offset)
-            /// }
-            ///
-            /// // Create the scope
-            /// let scope = QueryScope::new_paginated_with_cursor(|_query_key, page_size, offset| async move {
-            ///     let (items, maybe_next_offset) = my_api_fn(page_size, offset).await;
-            ///     (items, maybe_next_offset)
-            /// });
-            ///
-            /// let client = QueryClient::new();
-            ///
-            /// // Fetch first page
-            /// let (first_page, more_pages) = client
-            ///     .fetch_query(
-            ///         scope.clone(),
-            ///         PaginatedPageKey {
-            ///             key: (),
-            ///             page_index: 0,
-            ///             page_size: 20,
-            ///         },
-            ///     )
-            ///     .await
-            ///     .expect("First page should exist");
-            ///
-            /// assert_eq!(first_page, (0..20).collect::<Vec<_>>());
-            /// assert!(more_pages);
-            ///
-            /// // Fetch second page
-            /// let (second_page, more_pages) = client
-            ///     .fetch_query(
-            ///         scope.clone(),
-            ///         PaginatedPageKey {
-            ///             key: (),
-            ///             page_index: 1,
-            ///             page_size: 20,
-            ///         },
-            ///     )
-            ///     .await
-            ///     .expect("Second page should exist");
-            ///
-            /// assert_eq!(second_page, (20..30).collect::<Vec<_>>());
-            /// assert!(!more_pages);
-            ///
-            /// // Requesting beyond available data returns None
-            /// assert!(client
-            ///     .fetch_query(
-            ///         scope.clone(),
-            ///         PaginatedPageKey {
-            ///             key: (),
-            ///             page_index: 2,
-            ///             page_size: 20,
-            ///         },
-            ///     )
-            ///     .await
-            ///     .is_none());
             /// ```
             pub fn new_paginated_with_cursor<Cursor, Fut>(
                 getter: impl Fn(Key, usize, Option<Cursor>) -> Fut + 'static $($impl_fn_generics)*,

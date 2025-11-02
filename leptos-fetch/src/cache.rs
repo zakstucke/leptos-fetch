@@ -238,6 +238,7 @@ impl ScopeLookup {
         let result = Self { scope_id };
 
         SCOPE_LOOKUPS.write().insert(scope_id, Default::default());
+
         SCOPE_SUBSCRIPTION_LOOKUPS
             .lock()
             .insert(scope_id, ScopeSubs::new(result));
