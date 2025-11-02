@@ -5,20 +5,22 @@ use std::{
     time::Duration,
 };
 
-use leptos::prelude::{ArcRwSignal, GetUntracked, Set};
+use leptos::prelude::{ArcRwSignal, GetUntracked, Owner, Set};
 use parking_lot::Mutex;
 use send_wrapper::SendWrapper;
 
 use crate::{
-    QueryOptions, SYNC_TRACK_UPDATE_MARKER,
-    cache::{ScopeLookup, Scopes},
+    QueryOptions, SYNC_TRACK_UPDATE_MARKER, UntypedQueryClient,
+    cache::{OnScopeMissing, ScopeLookup, Scopes},
     cache_scope::QueryAbortReason,
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     options_combine,
     query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
     safe_dt_dur_add,
-    utils::{KeyHash, ResetInvalidated, new_buster_id},
+    utils::{
+        KeyHash, ResetInvalidated, new_buster_id, provide_cb_contexts, run_external_callbacks,
+    },
     value_with_callbacks::{GcHandle, GcValue, RefetchCbResult, RefetchHandle},
 };
 
@@ -124,7 +126,7 @@ where
 
     /// Option when already stale.
     fn till_stale(&self) -> Option<Duration> {
-        if self.stale() {
+        if self.stale_or_invalidated() {
             None
         } else {
             let stale_after = safe_dt_dur_add(self.updated_at, self.combined_options.stale_time());
@@ -159,7 +161,7 @@ impl<K, V> Debug for Query<K, V> {
 impl<K, V> Query<K, V> {
     pub fn new(
         client_options: QueryOptions,
-        scope_lookup: ScopeLookup,
+        untyped_client: UntypedQueryClient,
         query_scope_info: &QueryScopeInfo,
         query_scope_info_for_new_query: QueryScopeQueryInfo<K>,
         key_hash: KeyHash,
@@ -178,6 +180,7 @@ impl<K, V> Query<K, V> {
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
+        let scope_lookup = untyped_client.scope_lookup;
         let cache_key = query_scope_info.cache_key;
         let combined_options = options_combine(client_options, scope_options);
         let active_resources =
@@ -201,6 +204,7 @@ impl<K, V> Query<K, V> {
             let key = key.clone();
             // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             let invalidation_prefix = invalidation_prefix.clone();
+            let scope_cache_key = query_scope_info.cache_key;
             Some(Arc::new(SendWrapper::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
                     scope_lookup.gc_query::<K, V>(&cache_key, &key_hash);
@@ -215,7 +219,15 @@ impl<K, V> Query<K, V> {
                     // Run the user callback if any:
                     if let Some(on_gc) = &on_gc {
                         let key = (*key.value_may_panic()).clone();
-                        on_gc.value_may_panic()(&key);
+                        let current = Owner::current();
+                        let owner = Owner::default();
+                        owner.with(|| {
+                            provide_cb_contexts(untyped_client, scope_cache_key);
+                            on_gc.value_may_panic()(&key);
+                        });
+                        if let Some(current) = current {
+                            current.set();
+                        }
                     }
 
                     true
@@ -238,8 +250,8 @@ impl<K, V> Query<K, V> {
                 let mut cbs_scopes = vec![];
                 let result = scope_lookup.with_cached_scope_mut::<K, V, _, _>(
                     &mut scopes,
-                    &query_scope_info,
-                    false,
+                    query_scope_info.cache_key,
+                    OnScopeMissing::Skip,
                     |scopes| {
                         scopes
                             .refetch_enabled
@@ -278,9 +290,7 @@ impl<K, V> Query<K, V> {
                     }
                 }
                 drop(scopes);
-                for cb in cbs_external {
-                    cb();
-                }
+                run_external_callbacks(untyped_client, query_scope_info.cache_key, cbs_external);
                 result
             })
                 as Box<dyn Fn() -> RefetchCbResult>)))
@@ -451,7 +461,7 @@ impl<K, V> Query<K, V> {
         }
     }
 
-    pub fn stale(&self) -> bool {
+    pub fn stale_or_invalidated(&self) -> bool {
         if self.invalidated {
             true
         } else {

@@ -2,24 +2,21 @@ use std::{
     any::Any,
     collections::{HashMap, hash_map::Entry},
     future::Future,
-    hash::Hash,
     ops::{Deref, DerefMut},
     sync::{Arc, LazyLock},
 };
 
-use futures::FutureExt;
 use leptos::prelude::{ArcRwSignal, ArcSignal};
 
 use crate::{
-    QueryOptions,
     cache_scope::{QueryAbortReason, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
     maybe_local::MaybeLocal,
     query::Query,
-    query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
+    query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{KeyHash, OnDrop, OwnerChain, ResetInvalidated, new_buster_id, new_scope_id},
+    utils::{KeyHash, OnDrop, new_scope_id},
 };
 
 pub(crate) trait Busters: 'static {
@@ -90,6 +87,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         key_hashes: Vec<KeyHash>,
         invalidation_type: QueryAbortReason,
     ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>>;
+    fn cache_key(&self) -> ScopeCacheKey;
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -166,6 +164,10 @@ where
         })
     }
 
+    fn cache_key(&self) -> ScopeCacheKey {
+        self.query_scope_info.cache_key
+    }
+
     #[cfg(any(
         all(debug_assertions, feature = "devtools"),
         feature = "devtools-always"
@@ -236,6 +238,7 @@ impl ScopeLookup {
         let result = Self { scope_id };
 
         SCOPE_LOOKUPS.write().insert(scope_id, Default::default());
+
         SCOPE_SUBSCRIPTION_LOOKUPS
             .lock()
             .insert(scope_id, ScopeSubs::new(result));
@@ -410,8 +413,8 @@ impl ScopeLookup {
     pub fn with_cached_scope_mut<K, V, T, P>(
         &self,
         scopes: &mut Scopes,
-        query_scope_info: &QueryScopeInfo,
-        create_scope_if_missing: bool,
+        scope_cache_key: ScopeCacheKey,
+        on_scope_missing: OnScopeMissing,
         mut scopes_prehook: impl FnMut(&mut Scopes) -> P,
         cb: impl FnOnce(Option<&mut Scope<K, V>>, P) -> T,
     ) -> T
@@ -420,19 +423,16 @@ impl ScopeLookup {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let prehook_result = scopes_prehook(scopes);
-        let maybe_scope = match scopes.entry(query_scope_info.cache_key) {
-            Entry::Occupied(entry) => Some(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                if create_scope_if_missing {
-                    Some(entry.insert(Box::new(Scope::<K, V>::new(
-                        *self,
-                        query_scope_info.clone(),
-                    ))))
-                } else {
-                    None
-                }
-            }
-        };
+        let maybe_scope =
+            match scopes.entry(scope_cache_key) {
+                Entry::Occupied(entry) => Some(entry.into_mut()),
+                Entry::Vacant(entry) => match on_scope_missing {
+                    OnScopeMissing::Skip => None,
+                    OnScopeMissing::Create(query_scope_info) => Some(entry.insert(Box::new(
+                        Scope::<K, V>::new(*self, query_scope_info.clone()),
+                    ))),
+                },
+            };
 
         if let Some(scope) = maybe_scope {
             cb(
@@ -484,8 +484,8 @@ impl ScopeLookup {
             futures::channel::oneshot::channel::<QueryAbortReason>();
         self.with_cached_scope_mut::<K, V, _, _>(
             &mut self.scopes_mut(),
-            query_scope_info,
-            true,
+            query_scope_info.cache_key,
+            OnScopeMissing::Create(query_scope_info),
             |_| {},
             |scope, _| {
                 let scope = scope.expect("provided a default");
@@ -498,253 +498,11 @@ impl ScopeLookup {
         );
         query_abort_rx
     }
+}
 
-    pub async fn cached_or_fetch<K, V, T>(
-        &self,
-        client_options: QueryOptions,
-        scope_options: Option<QueryOptions>,
-        maybe_buster_if_uncached: Option<ArcRwSignal<u64>>,
-        query_scope_info: &QueryScopeInfo,
-        query_scope_info_for_new_query: impl Fn() -> QueryScopeQueryInfo<K>,
-        key: &K,
-        fetcher: impl AsyncFn(K) -> MaybeLocal<V>,
-        return_cb: impl Fn(CachedOrFetchCbInput<K, V>) -> CachedOrFetchCbOutput<T>,
-        maybe_preheld_fetcher_mutex_guard: Option<&futures::lock::MutexGuard<'_, ()>>,
-        lazy_maybe_local_key: impl FnOnce() -> MaybeLocal<K>,
-        owner_chain: &OwnerChain,
-    ) -> T
-    where
-        K: DebugIfDevtoolsEnabled + Hash + Clone + 'static,
-        V: DebugIfDevtoolsEnabled + Clone + 'static,
-    {
-        let key_hash = KeyHash::new(key);
-        let mut cached_buster = None;
-        let next_directive = self.with_cached_query::<K, V, _>(
-            &key_hash,
-            &query_scope_info.cache_key,
-            |maybe_cached| {
-                if let Some(cached) = maybe_cached {
-                    cached_buster = Some(cached.buster.clone());
-                    return_cb(CachedOrFetchCbInput {
-                        cached,
-                        variant: CachedOrFetchCbInputVariant::CachedUntouched,
-                    })
-                } else {
-                    CachedOrFetchCbOutput::Refetch
-                }
-            },
-        );
-
-        match next_directive {
-            CachedOrFetchCbOutput::Return(value) => value,
-            CachedOrFetchCbOutput::Refetch => {
-                // Will probably need to fetch, unless someone fetches whilst trying to get hold of the fetch mutex:
-                let fetcher_mutex = self.fetcher_mutex::<K, V>(key_hash, query_scope_info);
-                let _maybe_fetcher_mutex_guard_local = if maybe_preheld_fetcher_mutex_guard
-                    .is_none()
-                {
-                    let _fetcher_guard = match fetcher_mutex.try_lock() {
-                        Some(fetcher_guard) => fetcher_guard,
-                        None => {
-                            // If have to wait, should check cache again in case it was fetched while waiting.
-                            let fetcher_guard = fetcher_mutex.lock().await;
-                            let next_directive = self.with_cached_query::<K, V, _>(
-                                &key_hash,
-                                &query_scope_info.cache_key,
-                                |maybe_cached| {
-                                    if let Some(cached) = maybe_cached {
-                                        cached_buster = Some(cached.buster.clone());
-                                        return_cb(CachedOrFetchCbInput {
-                                            cached,
-                                            variant: CachedOrFetchCbInputVariant::CachedUntouched,
-                                        })
-                                    } else {
-                                        CachedOrFetchCbOutput::Refetch
-                                    }
-                                },
-                            );
-                            match next_directive {
-                                CachedOrFetchCbOutput::Return(value) => return value,
-                                CachedOrFetchCbOutput::Refetch => fetcher_guard,
-                            }
-                        }
-                    };
-                    Some(_fetcher_guard)
-                } else {
-                    // Owned externally so not an issue.
-                    None
-                };
-
-                #[cfg(any(
-                    all(debug_assertions, feature = "devtools"),
-                    feature = "devtools-always"
-                ))]
-                let before_time = chrono::Utc::now();
-
-                let loading_first_time = cached_buster.is_none();
-
-                #[cfg(any(
-                    all(debug_assertions, feature = "devtools"),
-                    feature = "devtools-always"
-                ))]
-                {
-                    // Running this before fetching so it'll show up in devtools straight away:
-                    if loading_first_time {
-                        self.client_subscriptions_mut().notify_query_created(
-                            crate::subs_client::QueryCreatedInfo {
-                                cache_key: query_scope_info.cache_key,
-                                scope_title: query_scope_info.title.clone(),
-                                key_hash,
-                                debug_key: crate::utils::DebugValue::new(key),
-                                combined_options: crate::options_combine(
-                                    client_options,
-                                    scope_options,
-                                ),
-                            },
-                        );
-                    }
-                }
-
-                let maybe_local_key = lazy_maybe_local_key();
-
-                enum MaybeNewValue<V> {
-                    NewValue(V),
-                    SsrStreamedValueOverride,
-                }
-
-                let maybe_new_value = self
-                    .with_notify_fetching(
-                        query_scope_info.cache_key,
-                        key_hash,
-                        loading_first_time,
-                        // Call the fetcher, but reset and repeat if an invalidation occurs whilst in-flight:
-                        async {
-                            loop {
-                                let query_abort_rx = self
-                                    .prepare_invalidation_channel::<K, V>(
-                                        query_scope_info,
-                                        key_hash,
-                                        &maybe_local_key,
-                                    );
-
-                                let fut = owner_chain.with(|| fetcher(key.clone()));
-
-                                futures::select_biased! {
-                                    rx_result = query_abort_rx.fuse() => {
-                                        if let Ok(reason) = rx_result {
-                                            match reason {
-                                                QueryAbortReason::Invalidate | QueryAbortReason::Clear => {},
-                                                QueryAbortReason::SsrStreamedValueOverride => {
-                                                    break MaybeNewValue::SsrStreamedValueOverride;
-                                                },
-                                            }
-                                        }
-                                    },
-                                    new_value = fut.fuse() => {
-                                        break MaybeNewValue::NewValue(new_value);
-                                    },
-                                }
-                            }
-                        },
-                    )
-                    .await;
-
-                #[cfg(any(
-                    all(debug_assertions, feature = "devtools"),
-                    feature = "devtools-always"
-                ))]
-                let elapsed_ms = chrono::Utc::now()
-                    .signed_duration_since(before_time)
-                    .num_milliseconds();
-
-                let buster_if_uncached = if loading_first_time {
-                    Some(
-                        maybe_buster_if_uncached
-                            .unwrap_or_else(|| ArcRwSignal::new(new_buster_id())),
-                    )
-                } else {
-                    None
-                };
-
-                let next_directive = self.with_cached_scope_mut::<_, _, _, _>(
-                    &mut self.scopes_mut(),
-                    query_scope_info,
-                    true,
-                    |_| {},
-                    |scope, _| {
-                        let scope = scope.expect("provided a default");
-                        match maybe_new_value {
-                            MaybeNewValue::NewValue(new_value) => {
-                                if let Some(cached) = scope.get_mut(&key_hash) {
-                                    cached.set_value(
-                                        new_value,
-                                        true,
-                                        #[cfg(any(
-                                            all(debug_assertions, feature = "devtools"),
-                                            feature = "devtools-always"
-                                        ))]
-                                        crate::events::Event::new(
-                                            crate::events::EventVariant::Fetched { elapsed_ms },
-                                        ),
-                                        ResetInvalidated::Reset,
-                                    );
-                                    return_cb(CachedOrFetchCbInput {
-                                        cached,
-                                        variant: CachedOrFetchCbInputVariant::CachedUpdated,
-                                    })
-                                } else {
-                                    // We already notified before the async fetch, so it would show up sooner.
-                                    scope.insert_without_query_created_notif(
-                                        key_hash,
-                                        Query::new(
-                                            client_options,
-                                            *self,
-                                            query_scope_info,
-                                            query_scope_info_for_new_query(),
-                                            key_hash,
-                                            maybe_local_key,
-                                            new_value,
-                                            buster_if_uncached.expect(
-                                                "loading_first_time means this is Some(). (bug)",
-                                            ),
-                                            scope_options,
-                                            None,
-                                            #[cfg(any(
-                                                all(debug_assertions, feature = "devtools"),
-                                                feature = "devtools-always"
-                                            ))]
-                                            crate::events::Event::new(
-                                                crate::events::EventVariant::Fetched { elapsed_ms },
-                                            ),
-                                        ),
-                                    );
-                                    return_cb(CachedOrFetchCbInput {
-                                        cached: scope.get(&key_hash).expect("Just set. (bug)"),
-                                        variant: CachedOrFetchCbInputVariant::Fresh,
-                                    })
-                                }
-                            }
-                            MaybeNewValue::SsrStreamedValueOverride => {
-                                return_cb(CachedOrFetchCbInput {
-                                    cached: scope
-                                        .get(&key_hash)
-                                        .expect("Should contain value streamed from server. (bug)"),
-                                    variant: CachedOrFetchCbInputVariant::Fresh,
-                                })
-                            }
-                        }
-                    },
-                );
-
-                match next_directive {
-                    CachedOrFetchCbOutput::Refetch => {
-                        panic!("Unexpected refetch directive after providing fresh value. (bug)")
-                    }
-                    CachedOrFetchCbOutput::Return(return_value) => return_value,
-                }
-            }
-        }
-    }
+pub(crate) enum OnScopeMissing<'a> {
+    Skip,
+    Create(&'a QueryScopeInfo),
 }
 
 pub(crate) struct CachedOrFetchCbInput<'a, K: 'static, V: 'static> {

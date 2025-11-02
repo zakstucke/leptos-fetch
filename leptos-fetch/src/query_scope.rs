@@ -72,20 +72,38 @@ macro_rules! define {
         /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
         ///
         /// If you don't need to set specific options, you can use functions with the [`crate::QueryClient`] directly.
-        #[derive(Clone)]
         pub struct $name<K, V> {
             query: Arc<dyn Fn(K) -> Pin<Box<dyn Future<Output = V> $($impl_fut_generics)*>> $($impl_fn_generics)*>,
-            invalidation_hierarchy_fn: Option<Arc<dyn Fn(&K) -> Vec<String> $($impl_fn_generics)*>>,
-            on_invalidation: Vec<Arc<dyn Fn(&K) $($impl_fn_generics)*>>,
-            on_gc: Vec<Arc<dyn Fn(&K) $($impl_fn_generics)*>>,
+            invalidation_hierarchy_fn: Option<Arc<dyn for<'a> Fn(&'a K) -> Vec<String> $($impl_fn_generics)*>>,
+            on_invalidation: Vec<Arc<dyn for<'a> Fn(&'a K) $($impl_fn_generics)*>>,
+            on_gc: Vec<Arc<dyn for<'a> Fn(&'a K) $($impl_fn_generics)*>>,
             fetcher_type_id: TypeId,
-            cache_key: ScopeCacheKey,
+            pub(crate) cache_key: ScopeCacheKey,
             options: QueryOptions,
             #[cfg(any(
                 all(debug_assertions, feature = "devtools"),
                 feature = "devtools-always"
             ))]
             title: Arc<String>,
+        }
+
+        impl<K, V> Clone for $name<K, V> {
+            fn clone(&self) -> Self {
+                Self {
+                    query: self.query.clone(),
+                    invalidation_hierarchy_fn: self.invalidation_hierarchy_fn.clone(),
+                    on_invalidation: self.on_invalidation.clone(),
+                    on_gc: self.on_gc.clone(),
+                    fetcher_type_id: self.fetcher_type_id,
+                    cache_key: self.cache_key,
+                    options: self.options,
+                    #[cfg(any(
+                        all(debug_assertions, feature = "devtools"),
+                        feature = "devtools-always"
+                    ))]
+                    title: self.title.clone(),
+                }
+            }
         }
 
         impl<K, V> Debug for $name<K, V> {

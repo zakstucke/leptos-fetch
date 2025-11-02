@@ -20,6 +20,7 @@ LF provides:
 - Optimistic updates
 - Debugging tools
 - Optional resources
+- Managed flexible pagination
 - Declarative query interaction as a supplement to leptos resources
 - In `ssr`, custom stream encoding at a global level
 
@@ -34,16 +35,24 @@ With a resource, you have to manually lift it to a higher scope if you want to p
 LF also allows you to interact declaratively with queries outside resources, subscribe to changes, and automatically update active resources where applicable.
 
 ## Table of Contents
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
+  - [Feature Flags](#feature-flags)
+  - [Version compatibility for Leptos and LF](#version-compatibility-for-leptos-and-lf)
+  - [Installation](#installation-1)
 - [Quick Start](#quick-start)
 - [Devtools](#devtools)
 - [Query Options](#query-options)
-- [Declarative Query Interactions](#declarative-query-management)
+- [Declarative Query Interactions](#declarative-query-interactions)
+  - [Query Invalidation](#query-invalidation)
 - [Linked Invalidation](#linked-invalidation)
 - [Subscriptions](#subscriptions)
-- [Thread Local & Threadsafe Variants](#thread-local-and-threadsafe-variants)
-- [Custom Streaming Codecs (`ssr`)](#custom-streaming-codecs)
-- [Pagination & Infinite Queries](#pagination-and-infinite-queries)
+- [Thread Local and Threadsafe Variants](#thread-local-and-threadsafe-variants)
+- [Custom Streaming Codecs](#custom-streaming-codecs)
+- [Paginated Query Scopes](#paginated-query-scopes)
+  - [Offset-based Pagination](#offset-based-pagination)
+  - [Cursor-based Pagination](#cursor-based-pagination)
+  - [Common Features](#common-features)
 
 ## Installation
 
@@ -357,78 +366,82 @@ QueryClient::new().set_codec::<MsgpackSerdeCodec>().provide();
 let client: MyQueryClient = expect_context();
 ```
 
-## Pagination and Infinite Queries
+## Paginated Query Scopes
 
-Pagination can be achieved simply with basic primitives:
-```rust,no_run
-use leptos::prelude::*;
+Paginated query scopes enable efficient data fetching by loading data in pages whilst maintaining a shared cache across different page sizes. LF provides two pagination strategies:
 
-#[derive(Clone, Debug)]
-struct Page;
+**Offset-based pagination** (`new_paginated_with_offset`) - Preferred when your API supports it:
+- Supports jumping directly to any page (no need to load intermediate pages)
+- Returns total item count (if known), enabling total page count calculations
+- Better UX for traditional page-based navigation
 
-async fn get_page(page_index: usize) -> Page {
-    Page
+**Cursor-based pagination** (`new_paginated_with_cursor`) - For APIs without offset support:
+- Works with continuation tokens/cursors
+- Good for infinite scroll internal API patterns
+- Acts as an infinite API backing to a paginated user-facing API
+
+Both methods internally manage the complexities - you only request pages with a page size, and LF handles caching and data fetching.
+
+### Offset-based Pagination
+
+```rust,ignore
+let scope = QueryScope::new_paginated_with_offset(|key, nb_items: usize, offset: u64| async move {
+    // Your API call - fetch nb_items starting at offset
+    let (items, total_items) = api_fetch(offset, nb_items).await;
+    (items, total_items)  // total_items: Option<u64>
+});
+
+// Fetch page 0
+let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 0,
+    page_size: 20,
+}).await.expect("Page exists");
+
+// Jump directly to page 10 (no need to load pages 1-9)
+let (items, total) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 10,
+    page_size: 20,
+}).await.expect("Page exists");
+
+// Calculate total pages client-side
+if let Some(total_items) = total {
+    let total_pages = (total_items as f64 / 20.0).ceil() as u64;
 }
-
-let client = leptos_fetch::QueryClient::new();
-
-// Initial page is 0:
-let active_page_index = RwSignal::new(0);
-
-// The resource is reactive over the active_page_index signal:
-let resource = client.local_resource(get_page, move || active_page_index.get());
-
-// Update the page to 1:
-active_page_index.set(1);
 ```
 
-Likewise with infinite queries, the [`QueryClient::update_query_async`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryClient.html#method.update_query_async) makes it easy with a single cache key:
+### Cursor-based Pagination
 
-```rust,no_run
-use leptos::prelude::*;
+```rust,ignore
+let scope = QueryScope::new_paginated_with_cursor(|key, nb_items: usize, cursor: Option<Ct>| async move {
+    // Your API call - fetch nb_items using cursor
+    let (items, next_cursor) = api_fetch(cursor, nb_items).await;
+    (items, next_cursor)  // next_cursor: Option<Ct>, None when no more data
+});
 
-#[derive(Clone, Debug)]
-struct InfiniteItem(usize);
+// Fetch pages sequentially, if requesting page 10, will have to load the data internally for pages 1-9
+let (page0, has_more) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 0,
+    page_size: 20,
+}).await.expect("Page exists");
 
-#[derive(Clone, Debug)]
-struct InfiniteList {
-    items: Vec<InfiniteItem>,
-    offset: usize,
-    more_available: bool,
-}
+let (page1, has_more) = client.fetch_query(scope, PaginatedPageKey {
+    key: (),
+    page_index: 1,
+    page_size: 20,
+}).await.expect("Page exists");
 
-async fn get_list_items(offset: usize) -> Vec<InfiniteItem> {
-    (offset..offset + 10).map(InfiniteItem).collect()
-}
-
-async fn get_list_query(_key: ()) -> InfiniteList {
-    let items = get_list_items(0).await;
-    InfiniteList {
-        offset: items.len(),
-        more_available: !items.is_empty(),
-        items,
-    }
-}
-
-let client = leptos_fetch::QueryClient::new();
-
-// Initialise the query with the first load.
-// we're not using a reactive key here for extending the list, but declarative updates instead.
-let resource = client.local_resource(get_list_query, || ());
-
-async {
-    // When wanting to load more items, update_query_async can be called declaratively to update the cached item and resource:
-    client
-        .update_query_async(get_list_query, (), async |last| {
-            if last.more_available {
-                let next_items = get_list_items(last.offset).await;
-                last.offset += next_items.len();
-                last.more_available = !next_items.is_empty();
-                last.items.extend(next_items);
-            }
-        })
-        .await;
-};
+// has_more: bool indicates if another page exists
 ```
+
+### Common Features
+
+Both pagination types:
+- Use `PaginatedPageKey<Key>` to request pages by `page_index` and `page_size`
+- Return `None` when requesting a page beyond available data
+- Share cached data across different page sizes
+- Support all standard query features (invalidation, stale times, etc.)
 
 <!-- cargo-rdme end -->
