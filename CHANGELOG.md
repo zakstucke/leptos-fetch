@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Replaced spawn during invalidation with internal callbacks. ([#56](https://github.com/zakstucke/leptos-fetch/pull/56))
+- Fixed memory leak and some panic on drop opportunities in ssr. ([#59](https://github.com/zakstucke/leptos-fetch/pull/59))
 
 ---
 

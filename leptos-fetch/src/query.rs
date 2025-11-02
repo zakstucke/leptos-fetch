@@ -7,7 +7,6 @@ use std::{
 
 use leptos::prelude::{ArcRwSignal, GetUntracked, Owner, Set};
 use parking_lot::Mutex;
-use send_wrapper::SendWrapper;
 
 use crate::{
     QueryOptions, SYNC_TRACK_UPDATE_MARKER, UntypedQueryClient,
@@ -32,10 +31,8 @@ pub(crate) struct Query<K, V: 'static> {
     invalidation_prefix: Option<Vec<String>>,
     on_invalidation: Option<MaybeLocal<Arc<dyn Fn(&K)>>>,
     invalidated: bool,
-    /// Will always be None on the server, hence the SendWrapper is fine:
-    gc_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> bool>>>>,
-    /// Will always be None on the server, hence the SendWrapper is fine:
-    refetch_cb: Option<Arc<SendWrapper<Box<dyn Fn() -> RefetchCbResult>>>>,
+    gc_cb: Option<Arc<Box<dyn Fn() -> bool + Send + Sync>>>,
+    refetch_cb: Option<Arc<Box<dyn Fn() -> RefetchCbResult + Send + Sync>>>,
     active_resources: Arc<Mutex<HashSet<u64>>>,
     pub buster: ArcRwSignal<u64>,
     scope_lookup: ScopeLookup,
@@ -51,16 +48,15 @@ pub(crate) struct Query<K, V: 'static> {
 
 impl<K, V> Drop for Query<K, V> {
     fn drop(&mut self) {
-        self.scope_lookup
-            .scope_subscriptions_mut()
-            .notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
-        self.scope_lookup
-            .scope_subscriptions_mut()
-            .notify_active_resource_change(self.cache_key, self.key_hash, 0);
+        if let Some(mut subs) = self.scope_lookup.try_scope_subscriptions_mut() {
+            subs.notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
+
+            #[cfg(any(
+                all(debug_assertions, feature = "devtools"),
+                feature = "devtools-always"
+            ))]
+            subs.notify_active_resource_change(self.cache_key, self.key_hash, 0);
+        }
     }
 }
 
@@ -202,10 +198,9 @@ impl<K, V> Query<K, V> {
         {
             let active_resources = active_resources.clone();
             let key = key.clone();
-            // GC is client only (non-ssr) hence can wrap in a SendWrapper:
             let invalidation_prefix = invalidation_prefix.clone();
             let scope_cache_key = query_scope_info.cache_key;
-            Some(Arc::new(SendWrapper::new(Box::new(move || {
+            Some(Arc::new(Box::new(move || {
                 if active_resources.lock().is_empty() {
                     scope_lookup.gc_query::<K, V>(&cache_key, &key_hash);
 
@@ -235,7 +230,7 @@ impl<K, V> Query<K, V> {
                     false
                 }
             })
-                as Box<dyn Fn() -> bool>)))
+                as Box<dyn Fn() -> bool + Send + Sync>))
         } else {
             None
         };
@@ -243,9 +238,8 @@ impl<K, V> Query<K, V> {
         let refetch_cb = if cfg!(any(test, not(feature = "ssr")))
             && combined_options.refetch_interval().is_some()
         {
-            // Refetching is client only (non-ssr) hence can wrap in a SendWrapper:
             let query_scope_info = query_scope_info.clone();
-            Some(Arc::new(SendWrapper::new(Box::new(move || {
+            Some(Arc::new(Box::new(move || {
                 let mut scopes = scope_lookup.scopes_mut();
                 let mut cbs_scopes = vec![];
                 let result = scope_lookup.with_cached_scope_mut::<K, V, _, _>(
@@ -293,7 +287,7 @@ impl<K, V> Query<K, V> {
                 run_external_callbacks(untyped_client, query_scope_info.cache_key, cbs_external);
                 result
             })
-                as Box<dyn Fn() -> RefetchCbResult>)))
+                as Box<dyn Fn() -> RefetchCbResult + Send + Sync>))
         } else {
             None
         };

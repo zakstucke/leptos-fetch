@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     future::Future,
     ops::{Deref, DerefMut},
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
 use leptos::prelude::{ArcRwSignal, ArcSignal};
@@ -11,12 +11,13 @@ use leptos::prelude::{ArcRwSignal, ArcSignal};
 use crate::{
     cache_scope::{QueryAbortReason, Scope},
     debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
+    global::{GLOBAL_INVALIDATION_TRIE, GLOBAL_SCOPE_LOOKUPS, GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS},
     maybe_local::MaybeLocal,
     query::Query,
     query_scope::{QueryScopeInfo, ScopeCacheKey},
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{KeyHash, OnDrop, new_scope_id},
+    utils::{KeyHash, OnDrop},
 };
 
 pub(crate) trait Busters: 'static {
@@ -94,7 +95,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
     ))]
     fn title(&self) -> &Arc<String>;
     #[cfg(test)]
-    fn size(&self) -> usize;
+    fn total_cached_queries(&self) -> usize;
 }
 
 impl<K, V> ScopeTrait for Scope<K, V>
@@ -177,7 +178,7 @@ where
     }
 
     #[cfg(test)]
-    fn size(&self) -> usize {
+    fn total_cached_queries(&self) -> usize {
         self.cache_size()
     }
 }
@@ -213,69 +214,43 @@ impl DerefMut for Scopes {
     }
 }
 
-static SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
-    LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
-
-static SCOPE_SUBSCRIPTION_LOOKUPS: LazyLock<parking_lot::Mutex<HashMap<u64, ScopeSubs>>> =
-    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
-
-static INVALIDATION_TRIE: LazyLock<
-    parking_lot::Mutex<HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>>,
-> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
-
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
-static CLIENT_SUBSCRIPTION_LOOKUPS: LazyLock<
-    parking_lot::Mutex<HashMap<u64, crate::subs_client::ClientSubs>>,
-> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
-
 impl ScopeLookup {
-    pub fn new() -> Self {
-        let scope_id = new_scope_id();
-
-        let result = Self { scope_id };
-
-        SCOPE_LOOKUPS.write().insert(scope_id, Default::default());
-
-        SCOPE_SUBSCRIPTION_LOOKUPS
-            .lock()
-            .insert(scope_id, ScopeSubs::new(result));
-
-        INVALIDATION_TRIE
-            .lock()
-            .insert(scope_id, Default::default());
-
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
-        CLIENT_SUBSCRIPTION_LOOKUPS
-            .lock()
-            .insert(scope_id, crate::subs_client::ClientSubs::new(result));
-
-        result
-    }
-
-    pub fn scopes(&self) -> parking_lot::MappedRwLockReadGuard<'_, Scopes> {
-        parking_lot::RwLockReadGuard::map(
-            SCOPE_LOOKUPS.read(),
+    // Returns None if scope not found, likely because it was cleaned up and this is happening during drop:
+    pub fn try_scopes(&self) -> Option<parking_lot::MappedRwLockReadGuard<'_, Scopes>> {
+        let guard = GLOBAL_SCOPE_LOOKUPS.read();
+        if !guard.contains_key(&self.scope_id) {
+            return None;
+        }
+        Some(parking_lot::RwLockReadGuard::map(
+            guard,
             |scope_lookups: &HashMap<u64, Scopes>| {
                 scope_lookups
                     .get(&self.scope_id)
-                    .expect("Scope not found (bug)")
+                    .expect("leptos-fetch bug: scope not found, even though just checked")
+            },
+        ))
+    }
+
+    #[track_caller]
+    pub fn scopes(&self) -> parking_lot::MappedRwLockReadGuard<'_, Scopes> {
+        let location = std::panic::Location::caller();
+        parking_lot::RwLockReadGuard::map(
+            GLOBAL_SCOPE_LOOKUPS.read(),
+            |scope_lookups: &HashMap<u64, Scopes>| {
+                scope_lookups
+                    .get(&self.scope_id)
+                    .unwrap_or_else(|| panic!("leptos-fetch bug: scope not found at {location}",))
             },
         )
     }
 
     pub fn scopes_mut(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Scopes> {
         parking_lot::RwLockWriteGuard::map(
-            SCOPE_LOOKUPS.write(),
+            GLOBAL_SCOPE_LOOKUPS.write(),
             |scope_lookups: &mut HashMap<u64, Scopes>| {
                 scope_lookups
                     .get_mut(&self.scope_id)
-                    .expect("Scope not found (bug)")
+                    .expect("leptos-fetch bug: scope not found")
             },
         )
     }
@@ -284,7 +259,7 @@ impl ScopeLookup {
         &self,
     ) -> parking_lot::MappedMutexGuard<'_, Trie<(ScopeCacheKey, KeyHash)>> {
         parking_lot::MutexGuard::map(
-            INVALIDATION_TRIE.lock(),
+            GLOBAL_INVALIDATION_TRIE.lock(),
             |invalidation_trie: &mut HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>| {
                 invalidation_trie
                     .get_mut(&self.scope_id)
@@ -293,9 +268,26 @@ impl ScopeLookup {
         )
     }
 
+    pub fn try_scope_subscriptions_mut(
+        &self,
+    ) -> Option<parking_lot::MappedMutexGuard<'_, ScopeSubs>> {
+        let guard = GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS.lock();
+        if !guard.contains_key(&self.scope_id) {
+            return None;
+        }
+        Some(parking_lot::MutexGuard::map(
+            guard,
+            |sub_lookups: &mut HashMap<u64, ScopeSubs>| {
+                sub_lookups
+                    .get_mut(&self.scope_id)
+                    .expect("Scope not found (bug)")
+            },
+        ))
+    }
+
     pub fn scope_subscriptions_mut(&self) -> parking_lot::MappedMutexGuard<'_, ScopeSubs> {
         parking_lot::MutexGuard::map(
-            SCOPE_SUBSCRIPTION_LOOKUPS.lock(),
+            GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS.lock(),
             |sub_lookups: &mut HashMap<u64, ScopeSubs>| {
                 sub_lookups
                     .get_mut(&self.scope_id)
@@ -321,11 +313,9 @@ impl ScopeLookup {
         let _notify_fetching_finished_guard = OnDrop::new({
             let self_ = *self;
             move || {
-                self_.scope_subscriptions_mut().notify_fetching_finish(
-                    cache_key,
-                    key_hash,
-                    loading_first_time,
-                );
+                if let Some(mut subs) = self_.try_scope_subscriptions_mut() {
+                    subs.notify_fetching_finish(cache_key, key_hash, loading_first_time);
+                }
             }
         });
         fut.await
@@ -339,7 +329,7 @@ impl ScopeLookup {
         &self,
     ) -> parking_lot::MappedMutexGuard<'_, crate::subs_client::ClientSubs> {
         parking_lot::MutexGuard::map(
-            CLIENT_SUBSCRIPTION_LOOKUPS.lock(),
+            crate::global::GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS.lock(),
             |sub_lookups: &mut HashMap<u64, crate::subs_client::ClientSubs>| {
                 sub_lookups
                     .get_mut(&self.scope_id)
@@ -357,13 +347,18 @@ impl ScopeLookup {
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: 'static,
     {
-        if let Some(query) = self.scopes().get(cache_key).and_then(|scope_cache| {
-            scope_cache
-                .as_any()
-                .downcast_ref::<Scope<K, V>>()
-                .expect("Cache entry type mismatch.")
-                .get(key_hash)
-        }) {
+        if let Some(query) = self
+            .try_scopes() // Called from drop handlers, might have already been cleaned up
+            .as_ref()
+            .and_then(|scope| scope.get(cache_key))
+            .and_then(|scope_cache| {
+                scope_cache
+                    .as_any()
+                    .downcast_ref::<Scope<K, V>>()
+                    .expect("Cache entry type mismatch.")
+                    .get(key_hash)
+            })
+        {
             query.mark_resource_dropped(resource_id);
         }
     }
