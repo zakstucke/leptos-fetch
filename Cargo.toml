@@ -13,9 +13,6 @@ description = "Async query manager for Leptos"
 readme = "./leptos-fetch/README.md"
 rust-version = "1.88"
 
-[patch.crates-io]
-send_wrapper = { path = "../send_wrapper" }
-
 [workspace.dependencies]
 any_spawner = "0.3.0"
 hydration_context = "0.3.0"
