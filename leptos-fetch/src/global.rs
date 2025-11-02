@@ -5,7 +5,7 @@ use crate::{
     query_scope::ScopeCacheKey,
     subs_scope::ScopeSubs,
     trie::Trie,
-    utils::{new_scope_id, KeyHash},
+    utils::{KeyHash, new_scope_id},
 };
 
 pub(crate) static GLOBAL_SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
