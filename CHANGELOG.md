@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.8](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.8)
+
 ### Added
 - Inbuilt pagination / infinite query support with [`QueryScope::new_paginated_with_cursor`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.new_paginated_with_cursor), [`QueryScope::new_paginated_with_offset`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.new_paginated_with_offset) and their local variants. ([#55](https://github.com/zakstucke/leptos-fetch/pull/55))
 - User callbacks on query garbage collection with [`QueryScope::on_gc`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.on_gc) and [`QueryScopeLocal::on_gc`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScopeLocal.html#method.on_gc). ([#58](https://github.com/zakstucke/leptos-fetch/pull/58))
@@ -12,6 +14,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 - Replaced spawn during invalidation with internal callbacks. ([#56](https://github.com/zakstucke/leptos-fetch/pull/56))
 - Fixed memory leak and some panic on drop opportunities in ssr. ([#59](https://github.com/zakstucke/leptos-fetch/pull/59))
+- `leptos` min version bumped to `0.8.13`, containing an [upstream bugfix](https://github.com/leptos-rs/leptos/pull/4427). ([#60](https://github.com/zakstucke/leptos-fetch/pull/60))
 
 ---
 

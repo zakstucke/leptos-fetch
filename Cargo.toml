@@ -3,7 +3,7 @@ members = ["leptos-fetch", "examples/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.4.7"
+version = "0.4.8"
 repository = "https://github.com/zakstucke/leptos-fetch"
 license = "MIT"
 authors = ["Zak Stucke"]
@@ -17,8 +17,8 @@ rust-version = "1.88"
 any_spawner = "0.3.0"
 hydration_context = "0.3.0"
 codee = "0.3"
-reactive_graph = "0.2.8"
-leptos = "0.8.10"
+reactive_graph = "0.2.10"
+leptos = "0.8.13"
 
 chrono = "0.4"
 chrono-humanize = "0.2"
