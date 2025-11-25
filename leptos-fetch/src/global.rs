@@ -56,10 +56,10 @@ impl ScopeLookup {
             crate::subs_client::ClientSubs::new(scope_lookup),
         );
 
-        println!(
-            "Post insert of scope_id {scope_id}, cache size: {}",
-            GLOBAL_SCOPE_LOOKUPS.read().len()
-        );
+        // println!(
+        //     "Post insert of scope_id {scope_id}, cache size: {}",
+        //     GLOBAL_SCOPE_LOOKUPS.read().len()
+        // );
 
         // If there is an owner, which there should be, and it's cleaned up,
         // gc the globals to prevent leaks.
@@ -73,7 +73,7 @@ impl ScopeLookup {
                 feature = "devtools-always"
             ))]
             GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS.lock().remove(&scope_id);
-            println!("Cleaned up scope_id {scope_id}",);
+            // println!("Cleaned up scope_id {scope_id}",);
         });
 
         scope_lookup
