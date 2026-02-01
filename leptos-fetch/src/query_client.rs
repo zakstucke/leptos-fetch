@@ -8,9 +8,43 @@ use std::{
     sync::{Arc, LazyLock, atomic::AtomicBool},
 };
 
+#[cfg(not(feature = "ssr"))]
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::Ordering as YieldOrdering,
+    task::{Context, Poll},
+};
+
 use chrono::{DateTime, Utc};
 use codee::{Decoder, Encoder};
 use futures::{FutureExt, pin_mut};
+
+/// A future that yields once, allowing other tasks to run.
+/// Used to ensure Leptos's Transition component properly tracks content for preservation.
+/// See: https://github.com/zakstucke/leptos-fetch/issues/64
+#[cfg(not(feature = "ssr"))]
+struct YieldOnce(bool);
+
+#[cfg(not(feature = "ssr"))]
+impl Future for YieldOnce {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0 {
+            Poll::Ready(())
+        } else {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+#[cfg(not(feature = "ssr"))]
+fn yield_now() -> YieldOnce {
+    YieldOnce(false)
+}
 use leptos::{
     prelude::{
         ArcRwSignal, ArcSignal, Effect, Get, GetUntracked, LocalStorage, Owner, Read,
@@ -270,6 +304,7 @@ impl<Codec: 'static> QueryClient<Codec> {
         let query_scope = Arc::new(query_scope);
         let query_options = query_scope.options();
         let resource_id = new_resource_id();
+        let scope_lookup = self.untyped_client.scope_lookup;
 
         // To call .mark_resource_dropped() when the resource is dropped:
         let drop_guard = ResourceDropGuard::<K, V>::new(
@@ -287,6 +322,21 @@ impl<Codec: 'static> QueryClient<Codec> {
                 if let Some(key) = maybe_key.as_ref() {
                     drop_guard.set_active_key(KeyHash::new(key));
                 }
+
+                // Check if value is already cached for the current key.
+                // If so, we'll yield once in the async block to ensure Leptos's
+                // Transition component goes through a suspend-resolve cycle,
+                // which is needed for proper "preserve previous content" behavior.
+                // See: https://github.com/zakstucke/leptos-fetch/issues/64
+                #[cfg(not(feature = "ssr"))]
+                let source_found_cached = maybe_key.as_ref().is_some_and(|key| {
+                    scope_lookup.with_cached_query::<K, V, _>(
+                        &KeyHash::new(key),
+                        &cache_key,
+                        |maybe_cached| maybe_cached.is_some(),
+                    )
+                });
+
                 // Note: cannot hoist outside of resource,
                 // it prevents the resource itself dropping when the owner is held by the resource itself,
                 // here each instance only lasts as long as the query.
@@ -296,6 +346,16 @@ impl<Codec: 'static> QueryClient<Codec> {
                     Owner::current(),
                 );
                 async move {
+                    // Yield once on cache hit to ensure Leptos's Transition component
+                    // properly tracks content for preservation. Without this, when the
+                    // resource returns a cached value synchronously (e.g. from prefetch),
+                    // Transition doesn't go through its suspend-resume lifecycle and fails
+                    // to capture the content as "previous" to preserve on subsequent key changes.
+                    #[cfg(not(feature = "ssr"))]
+                    if source_found_cached {
+                        yield_now().await;
+                    }
+
                     if let Some(key) = maybe_key {
                         let query_scope_query_info =
                             || QueryScopeQueryInfo::new_local(&query_scope, &key);
@@ -539,12 +599,21 @@ impl<Codec: 'static> QueryClient<Codec> {
         );
 
         let keyer = Arc::new(keyer);
+
+        // Tracks whether the source closure found a cached value on its last evaluation.
+        // Shared between source and fetcher closures to enable conditional yielding.
+        // See: https://github.com/zakstucke/leptos-fetch/issues/64
+        #[cfg(not(feature = "ssr"))]
+        let source_found_cached = Arc::new(AtomicBool::new(false));
+
         let resource =
             ArcResource::new_with_options(
                 {
                     let buster_if_uncached = buster_if_uncached.clone();
                     let drop_guard = drop_guard.clone();
                     let keyer = keyer.clone();
+                    #[cfg(not(feature = "ssr"))]
+                    let source_found_cached = source_found_cached.clone();
                     move || {
                         if let Some(key) = keyer().into_maybe_key() {
                             let key_hash = KeyHash::new(&key);
@@ -554,15 +623,21 @@ impl<Codec: 'static> QueryClient<Codec> {
                                 &cache_key,
                                 |maybe_cached| {
                                     if let Some(cached) = maybe_cached {
+                                        #[cfg(not(feature = "ssr"))]
+                                        source_found_cached.store(true, YieldOrdering::Relaxed);
                                         // Buster must be returned for it to be tracked.
                                         (Some(key.clone()), cached.buster.get())
                                     } else {
+                                        #[cfg(not(feature = "ssr"))]
+                                        source_found_cached.store(false, YieldOrdering::Relaxed);
                                         // Buster must be returned for it to be tracked.
                                         (Some(key.clone()), buster_if_uncached.get())
                                     }
                                 },
                             )
                         } else {
+                            #[cfg(not(feature = "ssr"))]
+                            source_found_cached.store(false, YieldOrdering::Relaxed);
                             (None, buster_if_uncached.get())
                         }
                     }
@@ -576,6 +651,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                         let query_scope_info = query_scope_info.clone();
                         let buster_if_uncached = buster_if_uncached.clone();
                         let _drop_guard = drop_guard.clone(); // Want the guard around everywhere until the resource is dropped.
+                        #[cfg(not(feature = "ssr"))]
+                        let source_found_cached = source_found_cached.load(YieldOrdering::Relaxed);
                         // Note: cannot hoist outside of resource,
                         // it prevents the resource itself dropping when the owner is held by the resource itself,
                         // here each instance only lasts as long as the query.
@@ -585,6 +662,17 @@ impl<Codec: 'static> QueryClient<Codec> {
                             Owner::current(),
                         );
                         async move {
+                            // Yield once on cache hit to ensure Leptos's Transition component
+                            // properly tracks content for preservation. Without this, when the
+                            // resource returns a cached value synchronously (e.g. from prefetch),
+                            // Transition doesn't go through its suspend-resume lifecycle and fails
+                            // to capture the content as "previous" to preserve on subsequent key
+                            // changes.
+                            #[cfg(not(feature = "ssr"))]
+                            if source_found_cached {
+                                yield_now().await;
+                            }
+
                             if let Some(key) = maybe_key {
                                 let query_scope_query_info =
                                     || QueryScopeQueryInfo::new(&query_scope, &key);

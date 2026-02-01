@@ -2286,4 +2286,50 @@ mod test {
             })
             .await;
     }
+
+    /// Regression test for https://github.com/zakstucke/leptos-fetch/issues/64
+    ///
+    /// When data is prefetched, `arc_resource` should still go through an async suspend-resolve
+    /// cycle (yield) rather than resolving synchronously. This is critical for `Transition` to
+    /// work correctly: without the yield, the Transition's internal `nth_run` counter doesn't
+    /// advance past the threshold, causing the fallback to show on the first key change.
+    #[tokio::test]
+    async fn test_prefetched_resource_yields_before_resolving() {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _owner) = prep_client!();
+                let (fetcher, fetch_calls) = default_fetcher();
+
+                let key: u64 = 5;
+
+                // Prefetch the query so it's in the cache.
+                client.prefetch_query(fetcher.clone(), key).await;
+                assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(10));
+
+                // Now create a resource using the same key.
+                // The resource should NOT resolve synchronously even though the data is cached.
+                // It should yield first (return None), then resolve on the next tick.
+                // This is critical for Transition: without the yield, the Transition's internal
+                // nth_run counter doesn't advance past 2, causing fallback to show on first key change.
+                let resource = client.arc_resource(fetcher.clone(), move || key);
+
+                // Before any tick, the resource should be pending (None) because of the yield.
+                assert_eq!(
+                    resource.get_untracked(),
+                    None,
+                    "Resource should NOT resolve synchronously on cache hit; it must yield first for Transition compatibility"
+                );
+
+                tick!();
+
+                // After a tick, the resource should have resolved with the cached value.
+                assert_eq!(resource.get_untracked(), Some(10));
+
+                // No additional fetch should have occurred.
+                assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+            })
+            .await;
+    }
 }
