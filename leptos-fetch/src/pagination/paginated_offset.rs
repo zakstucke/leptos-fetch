@@ -5,9 +5,8 @@ use std::{hash::Hash, sync::Arc};
 use leptos::prelude::*;
 
 use crate::{
-    PaginatedPageKey, QueryOptions, QueryScope, QueryScopeLocal, UntypedQueryClient,
-    cache::OnScopeMissing, debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
-    query_scope::ScopeCacheKey,
+    PaginatedPageKey, QueryOptions, QueryScope, QueryScopeLocal, UntypedQueryClient, cache::OnScopeMissing,
+    debug_if_devtools_enabled::DebugIfDevtoolsEnabled, query_scope::ScopeCacheKey,
 };
 
 macro_rules! define {
@@ -79,7 +78,9 @@ macro_rules! define {
                     move |key: KeyWithUnhashedItemCountAndOffsetRequested<Key>| {
                         let getter = getter.clone();
                         async move {
-                            let (items, mut maybe_total_items) = getter(key.key, key.item_count_requested, key.offset_requested).await;
+                            let (items, mut maybe_total_items) =
+                                getter(key.key, key.item_count_requested, key.offset_requested)
+                                    .await;
 
                             // Protect against incorrect item count when clearly no items left:
                             if items.is_empty() {
@@ -135,14 +136,17 @@ macro_rules! define {
                                     provided to the query context internally"
                                 );
 
-                            // If this query is reloading because it was stale, should invalidate the backing cache before reading it,
+                            // If this query is reloading because it was stale, should
+                            // invalidate the backing cache before reading it,
                             // otherwise will still get back the same stale data again:
-                            if let Some(metadata) = untyped_client.query_metadata::<PaginatedPageKey<Key>, Option<(Vec<PageItem>, Option<u64>)>>(
+                            if let Some(metadata) = untyped_client
+                                .query_metadata::<PaginatedPageKey<Key>, Option<(Vec<PageItem>, Option<u64>)>>(
                                 scope_cache_key,
                                 &page_key,
                             )
                             && metadata.stale_or_invalidated
-                            && let Some(backing_metadata) = untyped_client.query_metadata::<KeyWithUnhashedItemCountAndOffsetRequested<Key>, BackingCache<PageItem>>(
+                            && let Some(backing_metadata) = untyped_client
+                                .query_metadata::<KeyWithUnhashedItemCountAndOffsetRequested<Key>, BackingCache<PageItem>>(
                                 backing_cache_scope.cache_key,
                                 &KeyWithUnhashedItemCountAndOffsetRequested {
                                     key: page_key.key.clone(),
@@ -174,7 +178,8 @@ macro_rules! define {
                                 .await;
 
                             let target_idx_start = (page_key.page_index as u64) * (page_key.page_size as u64);
-                            let mut target_idx_end_exclusive = ((page_key.page_index as u64) + 1) * (page_key.page_size as u64);
+                            let mut target_idx_end_exclusive =
+                                ((page_key.page_index as u64) + 1) * (page_key.page_size as u64);
                             if let Some(maybe_total_items) = *infinite_cache.inner.maybe_total_items.lock() {
                                 // If page starts beyond available data, return None
                                 if target_idx_start >= maybe_total_items {
@@ -233,7 +238,14 @@ macro_rules! define {
                                 drop(_guard);
                             }
 
-                            infinite_cache.inner.items.get_range(target_idx_start, (target_idx_end_exclusive - target_idx_start) as usize).map(|items| {
+                            infinite_cache
+                                .inner
+                                .items
+                                .get_range(
+                                    target_idx_start,
+                                    (target_idx_end_exclusive - target_idx_start) as usize,
+                                )
+                                .map(|items| {
                                 (items, infinite_cache.inner.maybe_total_items.lock().clone())
                             })
                         }
@@ -281,7 +293,12 @@ macro_rules! define {
                             |maybe_scope, _| {
                                 if let Some(scope) = maybe_scope {
                                     for query_or_pending in scope.all_queries_mut_include_pending() {
-                                        if query_or_pending.key().value_if_safe().map(|test_key| test_key.key == key.key).unwrap_or(false) {
+                                        if query_or_pending
+                                            .key()
+                                            .value_if_safe()
+                                            .map(|test_key| test_key.key == key.key)
+                                            .unwrap_or(false)
+                                        {
                                             found_nb += 1;
                                         }
                                     }
@@ -390,7 +407,8 @@ mod tests {
     use crate::test::prep_vari;
     use crate::{PaginatedPageKey, QueryClient, QueryScope};
 
-    /// We don't know the serialization mechanism the user is using, so cannot return wrapping types from the query function.
+    /// We don't know the serialization mechanism the user is using, so cannot return
+    /// wrapping types from the query function.
     /// Hence returning (Vec<Item>, Option<total_items>) instead of a custom wrapping Page<Item> type.
     /// This test is just checking compilation.
     #[tokio::test]
@@ -399,9 +417,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (client, _guard, _owner) = prep_vari!(true);
-                let scope = QueryScope::new_paginated_with_offset(|_: (), _, _| async {
-                    (vec![()], Some(10))
-                });
+                let scope = QueryScope::new_paginated_with_offset(|_: (), _, _| async { (vec![()], Some(10)) });
                 client.resource(scope, || PaginatedPageKey {
                     key: (),
                     page_index: 0,
@@ -447,14 +463,13 @@ mod tests {
 
                 let (_call_count, my_api_fn) = get_simple_api_fn(30);
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_query_key, page_size, offset| {
-                        let my_api_fn = my_api_fn.clone();
-                        async move {
-                            let (items, total_items) = my_api_fn(page_size, offset);
-                            (items, total_items)
-                        }
-                    });
+                let scope = QueryScope::new_paginated_with_offset(move |_query_key, page_size, offset| {
+                    let my_api_fn = my_api_fn.clone();
+                    async move {
+                        let (items, total_items) = my_api_fn(page_size, offset);
+                        (items, total_items)
+                    }
+                });
 
                 let (first_page_logs, maybe_total) = client
                     .fetch_query(
@@ -521,23 +536,22 @@ mod tests {
                 let call_count_clone = call_count.clone();
 
                 // API that returns fewer items than requested
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), _page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), _page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            // Return only 3 items per call, even if more are requested
-                            let items = match offset {
-                                0 => vec![0, 1, 2],
-                                3 => vec![3, 4, 5],
-                                6 => vec![6, 7, 8],
-                                9 => vec![9, 10],
-                                _ => vec![],
-                            };
-                            (items, Some(11))
-                        }
-                    });
+                        // Return only 3 items per call, even if more are requested
+                        let items = match offset {
+                            0 => vec![0, 1, 2],
+                            3 => vec![3, 4, 5],
+                            6 => vec![6, 7, 8],
+                            9 => vec![9, 10],
+                            _ => vec![],
+                        };
+                        (items, Some(11))
+                    }
+                });
 
                 // Request page with size 10 - should make 4 API calls to get 10 items
                 let (items, total) = client
@@ -597,18 +611,16 @@ mod tests {
                 let call_count = Arc::new(AtomicUsize::new(0));
                 let call_count_clone = call_count.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            let offset_usize = offset as usize;
-                            let items: Vec<usize> =
-                                (offset_usize..offset_usize + page_size).collect();
-                            (items, Some(100))
-                        }
-                    });
+                        let offset_usize = offset as usize;
+                        let items: Vec<usize> = (offset_usize..offset_usize + page_size).collect();
+                        (items, Some(100))
+                    }
+                });
 
                 // First fetch
                 let _ = client
@@ -638,11 +650,7 @@ mod tests {
                         },
                     )
                     .await;
-                assert_eq!(
-                    call_count.load(Ordering::Relaxed),
-                    1,
-                    "Should still be 1 call - cached"
-                );
+                assert_eq!(call_count.load(Ordering::Relaxed), 1, "Should still be 1 call - cached");
 
                 // Fetch next page
                 let _ = client
@@ -655,11 +663,7 @@ mod tests {
                         },
                     )
                     .await;
-                assert_eq!(
-                    call_count.load(Ordering::Relaxed),
-                    2,
-                    "Second page needs new API call"
-                );
+                assert_eq!(call_count.load(Ordering::Relaxed), 2, "Second page needs new API call");
 
                 // Fetch first page again - should still be cached
                 let _ = client
@@ -684,9 +688,7 @@ mod tests {
     /// Test linked invalidation and clear between pages with same key
     #[rstest]
     #[tokio::test]
-    async fn test_paginated_offset_linked_invalidation_and_clear(
-        #[values(true, false)] clear: bool,
-    ) {
+    async fn test_paginated_offset_linked_invalidation_and_clear(#[values(true, false)] clear: bool) {
         crate::test::identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
             .run_until(async move {
@@ -695,21 +697,20 @@ mod tests {
                 let version = Arc::new(AtomicUsize::new(0));
                 let version_clone = version.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |key: String, page_size, offset| {
-                        let v = version_clone.clone();
-                        async move {
-                            let current_version = v.load(Ordering::Relaxed);
-                            let offset_usize = offset as usize;
+                let scope = QueryScope::new_paginated_with_offset(move |key: String, page_size, offset| {
+                    let v = version_clone.clone();
+                    async move {
+                        let current_version = v.load(Ordering::Relaxed);
+                        let offset_usize = offset as usize;
 
-                            // Return different data based on version
-                            let items: Vec<String> = (offset_usize..offset_usize + page_size)
-                                .map(|i| format!("{}_v{}_{}", key, current_version, i))
-                                .collect();
+                        // Return different data based on version
+                        let items: Vec<String> = (offset_usize..offset_usize + page_size)
+                            .map(|i| format!("{}_v{}_{}", key, current_version, i))
+                            .collect();
 
-                            (items, Some(30))
-                        }
-                    });
+                        (items, Some(30))
+                    }
+                });
 
                 // Fetch first page
                 let (items1, _) = client
@@ -801,10 +802,7 @@ mod tests {
                     .await
                     .expect("Page should exist");
 
-                assert_eq!(
-                    items2_new[0], "test_v1_10",
-                    "Second page should also have new version"
-                );
+                assert_eq!(items2_new[0], "test_v1_10", "Second page should also have new version");
             })
             .await;
     }
@@ -817,14 +815,12 @@ mod tests {
             .run_until(async move {
                 let (client, _guard, _owner) = prep_vari!(true);
 
-                let scope = QueryScope::new_paginated_with_offset(
-                    |_key: (), _page_size, offset| async move {
-                        match offset {
-                            0 => (vec![1, 2, 3], Some(3)),
-                            _ => (vec![], Some(3)),
-                        }
-                    },
-                );
+                let scope = QueryScope::new_paginated_with_offset(|_key: (), _page_size, offset| async move {
+                    match offset {
+                        0 => (vec![1, 2, 3], Some(3)),
+                        _ => (vec![], Some(3)),
+                    }
+                });
 
                 let (items, total) = client
                     .fetch_query(
@@ -856,21 +852,19 @@ mod tests {
                 let call_count = Arc::new(AtomicUsize::new(0));
                 let call_count_clone = call_count.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            // Add a small delay to simulate network latency
-                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        // Add a small delay to simulate network latency
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
-                            let offset_usize = offset as usize;
-                            let items: Vec<usize> =
-                                (offset_usize..offset_usize + page_size).collect();
-                            (items, Some(100))
-                        }
-                    });
+                        let offset_usize = offset as usize;
+                        let items: Vec<usize> = (offset_usize..offset_usize + page_size).collect();
+                        (items, Some(100))
+                    }
+                });
 
                 // Launch multiple concurrent fetches for the same page
                 let futures = (0..5).map(|_| {
@@ -912,19 +906,16 @@ mod tests {
                 let call_count = Arc::new(AtomicUsize::new(0));
                 let call_count_clone = call_count.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            let offset_usize = offset as usize;
-                            let items: Vec<usize> = (offset_usize
-                                ..std::cmp::min(offset_usize + page_size, 50))
-                                .collect();
-                            (items, Some(50))
-                        }
-                    });
+                        let offset_usize = offset as usize;
+                        let items: Vec<usize> = (offset_usize..std::cmp::min(offset_usize + page_size, 50)).collect();
+                        (items, Some(50))
+                    }
+                });
 
                 // Fetch with page size 5
                 let (items1, _) = client
@@ -997,25 +988,26 @@ mod tests {
                 let call_count = Arc::new(AtomicUsize::new(0));
                 let call_count_clone = call_count.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |key: String, page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |key: String, page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            let offset_usize = offset as usize;
-                            let items: Vec<String> = (offset_usize..offset_usize + page_size)
-                                .map(|i| format!("{}_{}", key, i))
-                                .collect();
-                            (items, Some(30))
-                        }
-                    })
-                    .with_options(match mode {
-                        TestMode::GcTime => crate::QueryOptions::default()
-                            .with_gc_time(std::time::Duration::from_millis(100)),
-                        TestMode::StaleTime => crate::QueryOptions::default()
-                            .with_stale_time(std::time::Duration::from_millis(100)),
-                    });
+                        let offset_usize = offset as usize;
+                        let items: Vec<String> = (offset_usize..offset_usize + page_size)
+                            .map(|i| format!("{}_{}", key, i))
+                            .collect();
+                        (items, Some(30))
+                    }
+                })
+                .with_options(match mode {
+                    TestMode::GcTime => {
+                        crate::QueryOptions::default().with_gc_time(std::time::Duration::from_millis(100))
+                    }
+                    TestMode::StaleTime => {
+                        crate::QueryOptions::default().with_stale_time(std::time::Duration::from_millis(100))
+                    }
+                });
 
                 // Fetch first page
                 let (items, _) = client
@@ -1050,7 +1042,8 @@ mod tests {
                 assert_eq!(items[0], "test_10");
                 assert_eq!(call_count.load(Ordering::Relaxed), 2);
 
-                // Wait another 50ms, so the first query is stale/gc'd, but the second is valid even when gc'd because 50ms left:
+                // Wait another 50ms, so the first query is stale/gc'd, but the second
+                // is valid even when gc'd because 50ms left:
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
                 // Fetch first page again
@@ -1133,18 +1126,16 @@ mod tests {
                 let call_count = Arc::new(AtomicUsize::new(0));
                 let call_count_clone = call_count.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
-                        let call_count = call_count_clone.clone();
-                        async move {
-                            call_count.fetch_add(1, Ordering::Relaxed);
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
+                    let call_count = call_count_clone.clone();
+                    async move {
+                        call_count.fetch_add(1, Ordering::Relaxed);
 
-                            let offset_usize = offset as usize;
-                            let items: Vec<usize> =
-                                (offset_usize..offset_usize + page_size).collect();
-                            (items, Some(1000))
-                        }
-                    });
+                        let offset_usize = offset as usize;
+                        let items: Vec<usize> = (offset_usize..offset_usize + page_size).collect();
+                        (items, Some(1000))
+                    }
+                });
 
                 // Jump directly to page 10 without loading pages 0-9
                 let (items, total) = client
@@ -1220,16 +1211,13 @@ mod tests {
             .run_until(async move {
                 let (client, _guard, _owner) = prep_vari!(true);
 
-                let scope = QueryScope::new_paginated_with_offset(
-                    move |_key: (), page_size, offset| async move {
-                        let offset_usize = offset as usize;
-                        let total_items = 47u64;
-                        let items: Vec<usize> = (offset_usize
-                            ..std::cmp::min(offset_usize + page_size, total_items as usize))
-                            .collect();
-                        (items, Some(total_items))
-                    },
-                );
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| async move {
+                    let offset_usize = offset as usize;
+                    let total_items = 47u64;
+                    let items: Vec<usize> =
+                        (offset_usize..std::cmp::min(offset_usize + page_size, total_items as usize)).collect();
+                    (items, Some(total_items))
+                });
 
                 // Fetch first page
                 let (items, total) = client
@@ -1296,18 +1284,16 @@ mod tests {
                 let total = Arc::new(AtomicUsize::new(100));
                 let total_clone = total.clone();
 
-                let scope =
-                    QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
-                        let total = total_clone.clone();
-                        async move {
-                            let current_total = total.load(Ordering::Relaxed) as u64;
-                            let offset_usize = offset as usize;
-                            let items: Vec<usize> = (offset_usize
-                                ..std::cmp::min(offset_usize + page_size, current_total as usize))
-                                .collect();
-                            (items, Some(current_total))
-                        }
-                    });
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| {
+                    let total = total_clone.clone();
+                    async move {
+                        let current_total = total.load(Ordering::Relaxed) as u64;
+                        let offset_usize = offset as usize;
+                        let items: Vec<usize> =
+                            (offset_usize..std::cmp::min(offset_usize + page_size, current_total as usize)).collect();
+                        (items, Some(current_total))
+                    }
+                });
 
                 // Fetch with initial total of 100
                 let (items, returned_total) = client
@@ -1358,13 +1344,11 @@ mod tests {
             .run_until(async move {
                 let (client, _guard, _owner) = prep_vari!(true);
 
-                let scope = QueryScope::new_paginated_with_offset(
-                    move |_key: (), page_size, offset| async move {
-                        let offset_usize = offset as usize;
-                        let items: Vec<usize> = (offset_usize..offset_usize + page_size).collect();
-                        (items, Some(1000))
-                    },
-                );
+                let scope = QueryScope::new_paginated_with_offset(move |_key: (), page_size, offset| async move {
+                    let offset_usize = offset as usize;
+                    let items: Vec<usize> = (offset_usize..offset_usize + page_size).collect();
+                    (items, Some(1000))
+                });
 
                 // Fetch page 0
                 let _ = client

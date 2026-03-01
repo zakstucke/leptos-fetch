@@ -17,9 +17,7 @@ use crate::{
     options_combine,
     query_scope::{QueryScopeInfo, QueryScopeQueryInfo, ScopeCacheKey},
     safe_dt_dur_add,
-    utils::{
-        KeyHash, ResetInvalidated, new_buster_id, provide_cb_contexts, run_external_callbacks,
-    },
+    utils::{KeyHash, ResetInvalidated, new_buster_id, provide_cb_contexts, run_external_callbacks},
     value_with_callbacks::{GcHandle, GcValue, RefetchCbResult, RefetchHandle},
 };
 
@@ -38,10 +36,7 @@ pub(crate) struct Query<K, V: 'static> {
     scope_lookup: ScopeLookup,
     cache_key: ScopeCacheKey,
     key_hash: KeyHash,
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub events: crate::events::Events,
     pub query_abort_tx: Option<futures::channel::oneshot::Sender<QueryAbortReason>>,
 }
@@ -51,19 +46,13 @@ impl<K, V> Drop for Query<K, V> {
         if let Some(mut subs) = self.scope_lookup.try_scope_subscriptions_mut() {
             subs.notify_value_set_updated_or_removed(self.cache_key, self.key_hash);
 
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             subs.notify_active_resource_change(self.cache_key, self.key_hash, 0);
         }
     }
 }
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 pub(crate) trait DynQuery {
     fn key_hash(&self) -> &KeyHash;
 
@@ -85,10 +74,7 @@ pub(crate) trait DynQuery {
     fn active_resources_len(&self) -> usize;
 }
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 impl<K, V> DynQuery for Query<K, V>
 where
     K: DebugIfDevtoolsEnabled + 'static,
@@ -131,11 +117,7 @@ where
             if till_stale < chrono::TimeDelta::zero() {
                 return None;
             }
-            Some(
-                till_stale
-                    .to_std()
-                    .expect("Could not convert to std duration"),
-            )
+            Some(till_stale.to_std().expect("Could not convert to std duration"))
         }
     }
 
@@ -166,10 +148,7 @@ impl<K, V> Query<K, V> {
         buster: ArcRwSignal<u64>,
         scope_options: Option<QueryOptions>,
         active_resources: Option<Arc<Mutex<HashSet<u64>>>>,
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         event: crate::events::Event,
     ) -> Self
     where
@@ -179,8 +158,7 @@ impl<K, V> Query<K, V> {
         let scope_lookup = untyped_client.scope_lookup;
         let cache_key = query_scope_info.cache_key;
         let combined_options = options_combine(client_options, scope_options);
-        let active_resources =
-            active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
+        let active_resources = active_resources.unwrap_or_else(|| Arc::new(Mutex::new(HashSet::new())));
 
         let invalidation_prefix = query_scope_info_for_new_query.invalidation_prefix;
         let on_invalidation = query_scope_info_for_new_query.on_invalidation;
@@ -229,15 +207,12 @@ impl<K, V> Query<K, V> {
                 } else {
                     false
                 }
-            })
-                as Box<dyn Fn() -> bool + Send + Sync>))
+            }) as Box<dyn Fn() -> bool + Send + Sync>))
         } else {
             None
         };
 
-        let refetch_cb = if cfg!(any(test, not(feature = "ssr")))
-            && combined_options.refetch_interval().is_some()
-        {
+        let refetch_cb = if cfg!(any(test, not(feature = "ssr"))) && combined_options.refetch_interval().is_some() {
             let query_scope_info = query_scope_info.clone();
             Some(Arc::new(Box::new(move || {
                 let mut scopes = scope_lookup.scopes_mut();
@@ -255,20 +230,18 @@ impl<K, V> Query<K, V> {
                     },
                     |maybe_scope, refetch_enabled| {
                         if refetch_enabled {
-                            // Invalidation will only trigger a refetch if there are active resources, hence fine to always call:
+                            // Invalidation will only trigger a refetch if there are active
+                            // resources, hence fine to always call:
                             if let Some(scope) = maybe_scope
                                 && let Some(cached) = scope.get_mut(&key_hash)
                             {
                                 let cb_scopes = cached.invalidate(QueryAbortReason::Invalidate);
                                 cbs_scopes.push(cb_scopes);
-                                #[cfg(any(
-                                    all(debug_assertions, feature = "devtools"),
-                                    feature = "devtools-always"
-                                ))]
+                                #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
                                 {
                                     cached.events.push(crate::events::Event::new(
-                                    crate::events::EventVariant::RefetchTriggeredViaInvalidation,
-                                ));
+                                        crate::events::EventVariant::RefetchTriggeredViaInvalidation,
+                                    ));
                                 }
                             }
                             RefetchCbResult::Ok
@@ -294,10 +267,7 @@ impl<K, V> Query<K, V> {
 
         let created_at = chrono::Utc::now();
         Self {
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             events: crate::events::Events::new(&scope_lookup, cache_key, key_hash, vec![event]),
             key,
             value_maybe_stale: GcValue::new(
@@ -337,10 +307,7 @@ impl<K, V> Query<K, V> {
             guard.insert(resource_id);
             guard.len()
         };
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         {
             self.scope_lookup
                 .scope_subscriptions_mut()
@@ -355,10 +322,7 @@ impl<K, V> Query<K, V> {
             guard.remove(&resource_id);
             guard.len()
         };
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         {
             self.scope_lookup
                 .scope_subscriptions_mut()
@@ -396,14 +360,10 @@ impl<K, V> Query<K, V> {
                 }
             }
 
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             {
-                self.events.push(crate::events::Event::new(
-                    crate::events::EventVariant::Invalidated,
-                ));
+                self.events
+                    .push(crate::events::Event::new(crate::events::EventVariant::Invalidated));
             }
 
             if let Some(on_invalidation) = self.on_invalidation.clone() {
@@ -459,8 +419,7 @@ impl<K, V> Query<K, V> {
         if self.invalidated {
             true
         } else {
-            chrono::Utc::now()
-                > safe_dt_dur_add(self.updated_at, self.combined_options.stale_time())
+            chrono::Utc::now() > safe_dt_dur_add(self.updated_at, self.combined_options.stale_time())
         }
     }
 
@@ -476,10 +435,7 @@ impl<K, V> Query<K, V> {
         &mut self,
         new_value: MaybeLocal<V>,
         track: bool,
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         event: crate::events::Event,
         reset_invalidated: ResetInvalidated,
     ) where
@@ -489,15 +445,11 @@ impl<K, V> Query<K, V> {
             |value| {
                 // Only need to update on false, always defaults to true:
                 if !track {
-                    SYNC_TRACK_UPDATE_MARKER
-                        .with(|marker| marker.store(false, std::sync::atomic::Ordering::Relaxed));
+                    SYNC_TRACK_UPDATE_MARKER.with(|marker| marker.store(false, std::sync::atomic::Ordering::Relaxed));
                 }
                 *value = new_value;
             },
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             event,
             reset_invalidated,
         );
@@ -507,10 +459,7 @@ impl<K, V> Query<K, V> {
     pub fn update_value<T>(
         &mut self,
         cb: impl FnOnce(&mut MaybeLocal<V>) -> T,
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         event: crate::events::Event,
         reset_invalidated: ResetInvalidated,
     ) -> T
@@ -518,26 +467,18 @@ impl<K, V> Query<K, V> {
         V: DebugIfDevtoolsEnabled + 'static,
     {
         // Default to true instead overriden during the modifier:
-        SYNC_TRACK_UPDATE_MARKER
-            .with(|marker| marker.store(true, std::sync::atomic::Ordering::Relaxed));
+        SYNC_TRACK_UPDATE_MARKER.with(|marker| marker.store(true, std::sync::atomic::Ordering::Relaxed));
 
         let result = cb(self.value_maybe_stale.value_mut());
 
-        let should_track = SYNC_TRACK_UPDATE_MARKER
-            .with(|marker| marker.load(std::sync::atomic::Ordering::Relaxed));
+        let should_track = SYNC_TRACK_UPDATE_MARKER.with(|marker| marker.load(std::sync::atomic::Ordering::Relaxed));
 
         self.value_maybe_stale.reset_callbacks(
             GcHandle::new(self.gc_cb.clone(), self.combined_options.gc_time()),
-            RefetchHandle::new(
-                self.refetch_cb.clone(),
-                self.combined_options.refetch_interval(),
-            ),
+            RefetchHandle::new(self.refetch_cb.clone(), self.combined_options.refetch_interval()),
         );
 
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         {
             self.events.push(event);
         }
@@ -559,10 +500,7 @@ impl<K, V> Query<K, V> {
         result
     }
 
-    pub fn set_query_abort_tx(
-        &mut self,
-        invalidate_tx: futures::channel::oneshot::Sender<QueryAbortReason>,
-    ) {
+    pub fn set_query_abort_tx(&mut self, invalidate_tx: futures::channel::oneshot::Sender<QueryAbortReason>) {
         self.query_abort_tx = Some(invalidate_tx);
     }
 }

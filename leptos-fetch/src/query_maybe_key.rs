@@ -18,9 +18,7 @@ impl<K, V> QueryMaybeKey<K, V> for K {
     }
 
     fn prepare_mapped_value(v: Option<V>) -> V {
-        v.expect(
-            "QueryMaybeKey::prepare_mapped_value: value is None when the key was always available, this is a bug"
-        )
+        v.expect("QueryMaybeKey::prepare_mapped_value: value is None when the key was always available, this is a bug")
     }
 
     fn mapped_to_maybe_value(v: Self::MappedValue) -> Option<V> {

@@ -28,10 +28,7 @@ impl Hash for ScopeCacheKey {
     }
 }
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 #[track_caller]
 fn format_title(base: &str) -> Arc<String> {
     let loc = std::panic::Location::caller();
@@ -39,18 +36,11 @@ fn format_title(base: &str) -> Arc<String> {
     let file = format!(
         "{}:{}:{}",
         // Only want the final file, not the full path:
-        filepath
-            .split(std::path::MAIN_SEPARATOR_STR)
-            .last()
-            .unwrap_or(filepath),
+        filepath.split(std::path::MAIN_SEPARATOR_STR).last().unwrap_or(filepath),
         loc.line(),
         loc.column()
     );
-    Arc::new(format!(
-        "{}: {}",
-        file,
-        base.trim_end_matches("::{{closure}}")
-    ))
+    Arc::new(format!("{}: {}", file, base.trim_end_matches("::{{closure}}")))
 }
 
 /// A marker struct to allow query function with or without a key.
@@ -67,9 +57,11 @@ macro_rules! define {
     ([$($impl_fut_generics:tt)*], [$($impl_fn_generics:tt)*], $name:ident, $sname:literal, $sthread:literal) => {
         /// A
         #[doc = $sthread]
-        /// wrapper for a query function. This can be used to add specific [`QueryOptions`] to only apply to one query scope.
+        /// wrapper for a query function. This can be used to add specific
+        /// [`QueryOptions`] to only apply to one query scope.
         ///
-        /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
+        /// These [`QueryOptions`] will be combined with the global [`QueryOptions`]
+        /// set on the [`crate::QueryClient`], with the local options taking precedence.
         ///
         /// If you don't need to set specific options, you can use functions with the [`crate::QueryClient`] directly.
         pub struct $name<K, V> {
@@ -150,15 +142,28 @@ macro_rules! define {
 
                 /// Set specific [`QueryOptions`] to only apply to this query scope.
                 ///
-                /// These [`QueryOptions`] will be combined with the global [`QueryOptions`] set on the [`crate::QueryClient`], with the local options taking precedence.
+                /// These [`QueryOptions`] will be combined with the global
+                /// [`QueryOptions`] set on the [`crate::QueryClient`], with the local
+                /// options taking precedence.
                 pub fn with_options(mut self, options: QueryOptions) -> Self {
                     self.options = options;
                     self
                 }
 
-                /// Different query types are sometimes linked to the same source, e.g. you may want an invalidation of `list_blogposts()` to always automatically invalidate `get_blogpost(id)`.
+                /// Different query types are sometimes linked to the same source,
+                /// e.g. you may want an invalidation of `list_blogposts()` to always
+                /// automatically invalidate `get_blogpost(id)`.
                 ///
-                /// [`QueryScope::with_invalidation_link`](https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.subscribe_is_fetching::with_invalidation_link) can be used to this effect, given a query key `&K`, you provide a `Vec<String>` that's used as a **hierarchy key (HK)** for that query. When a query is invalidated, any query's **HK** that's prefixed by this **HK** will also be invalidated automatically. E.g. A query with **HK** `["users"]` will also auto invalidate another query with `["users", "1"]`, but not the other way around. 2 queries with an identicial **HK** of `["users"]` will auto invalidate each other.
+                /// [`QueryScope::with_invalidation_link`] can be used to this effect,
+                /// given a query key `&K`, you provide a `Vec<String>` that's used as
+                /// a **hierarchy key (HK)** for that query. When a query is invalidated,
+                /// any query's **HK** that's prefixed by this **HK** will also be
+                /// invalidated automatically. E.g. A query with **HK** `["users"]` will
+                /// also auto invalidate another query with `["users", "1"]`, but not the
+                /// other way around. 2 queries with an identicial **HK** of `["users"]`
+                /// will auto invalidate each other.
+                ///
+                /// [`QueryScope::with_invalidation_link`]: https://docs.rs/leptos-fetch/latest/leptos_fetch/struct.QueryScope.html#method.with_invalidation_link
                 ///
                 /// ```rust
                 /// use std::time::Duration;
@@ -582,10 +587,7 @@ where
         }
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn title(&self) -> Arc<String> {
         self.title.clone()
     }
@@ -644,10 +646,7 @@ where
         }
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn title(&self) -> Arc<String> {
         self.title.clone()
     }
@@ -660,10 +659,7 @@ define! { [], [], QueryScopeLocal, "QueryScopeLocal", "non-threadsafe" }
 pub(crate) struct QueryScopeInfo {
     pub options: Option<QueryOptions>,
     pub cache_key: ScopeCacheKey,
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub title: Arc<String>,
 }
 
@@ -677,10 +673,7 @@ impl QueryScopeInfo {
         Self {
             options: query_scope.options(),
             cache_key: query_scope.cache_key(),
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             title: query_scope.title(),
         }
     }
@@ -694,10 +687,7 @@ impl QueryScopeInfo {
         Self {
             options: query_scope.options(),
             cache_key: query_scope.cache_key(),
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             title: query_scope.title(),
         }
     }
@@ -724,9 +714,7 @@ where
             on_invalidation: query_scope
                 .on_invalidation()
                 .map(MaybeLocal::new_arc_with_key_arg_special),
-            on_gc: query_scope
-                .on_gc()
-                .map(MaybeLocal::new_arc_with_key_arg_special),
+            on_gc: query_scope.on_gc().map(MaybeLocal::new_arc_with_key_arg_special),
             invalidation_prefix: query_scope.invalidation_prefix(key),
             _key_marker: std::marker::PhantomData,
         }

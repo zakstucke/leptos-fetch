@@ -32,12 +32,10 @@ impl SortConfig {
     ) {
         match self.sort {
             SortOption::Ascii => items.sort_by(|a, b| {
-                get_ascii(a).iter().map(|s| s.to_lowercase()).cmp(
-                    get_ascii(b)
-                        .iter()
-                        .map(|s| s.to_lowercase())
-                        .collect::<Vec<_>>(),
-                )
+                get_ascii(a)
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .cmp(get_ascii(b).iter().map(|s| s.to_lowercase()).collect::<Vec<_>>())
             }),
             SortOption::UpdatedAt => items.sort_by_key(get_updated_at),
             SortOption::CreatedAt => items.sort_by_key(get_created_at),
@@ -85,15 +83,10 @@ pub(crate) fn filter_s<'a, T>(
         .map(|s| s.to_ascii_lowercase())
         .collect::<Vec<_>>();
     let raw_filter = raw_filter.trim().to_ascii_lowercase();
-    let mut filters = raw_filter
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
+    let mut filters = raw_filter.split_whitespace().map(|s| s.to_string()).collect::<Vec<_>>();
 
     // Making separate words additive filters, all must pass between the extras and the items:
-    filters.retain(|filter| {
-        !filter.is_empty() && !extra_strs_to_match.iter().any(|s| s.contains(filter))
-    });
+    filters.retain(|filter| !filter.is_empty() && !extra_strs_to_match.iter().any(|s| s.contains(filter)));
 
     items.into_iter().filter(move |item| {
         filters.is_empty() || {

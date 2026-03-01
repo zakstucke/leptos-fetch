@@ -1,17 +1,7 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    rkyv::Archive,
-    rkyv::Serialize,
-    rkyv::Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct BlogPost {
     pub id: u16,
     pub title: String,
@@ -49,11 +39,7 @@ pub mod ssr {
 #[server]
 pub async fn list_blogposts() -> Result<Vec<BlogPost>, ServerFnError> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    Ok(self::ssr::BLOGPOSTS
-        .lock()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>())
+    Ok(self::ssr::BLOGPOSTS.lock().iter().cloned().collect::<Vec<_>>())
 }
 
 #[server]
@@ -68,17 +54,7 @@ pub async fn add_blogpost(title: String) -> Result<(), ServerFnError> {
     Ok(())
 }
 
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    rkyv::Archive,
-    rkyv::Serialize,
-    rkyv::Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct BlogPostFull {
     pub blogpost: BlogPost,
     pub body: String,
@@ -87,11 +63,7 @@ pub struct BlogPostFull {
 #[server]
 pub async fn get_blogpost_full(id: u16) -> Result<Option<BlogPostFull>, ServerFnError> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    if let Some(blogpost) = self::ssr::BLOGPOSTS
-        .lock()
-        .iter()
-        .find(|blogpost| blogpost.id == id)
-    {
+    if let Some(blogpost) = self::ssr::BLOGPOSTS.lock().iter().find(|blogpost| blogpost.id == id) {
         Ok(Some(BlogPostFull {
             blogpost: blogpost.clone(),
             body: lipsum::lipsum(25),
@@ -103,8 +75,6 @@ pub async fn get_blogpost_full(id: u16) -> Result<Option<BlogPostFull>, ServerFn
 
 #[server]
 pub async fn delete_blogpost(id: u16) -> Result<(), ServerFnError> {
-    self::ssr::BLOGPOSTS
-        .lock()
-        .retain(|blogpost| blogpost.id != id);
+    self::ssr::BLOGPOSTS.lock().retain(|blogpost| blogpost.id != id);
     Ok(())
 }

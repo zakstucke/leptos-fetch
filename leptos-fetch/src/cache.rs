@@ -63,9 +63,7 @@ where
     }
 
     fn busters(&self) -> Vec<ArcRwSignal<u64>> {
-        self.all_queries()
-            .map(|query| query.buster.clone())
-            .collect::<Vec<_>>()
+        self.all_queries().map(|query| query.buster.clone()).collect::<Vec<_>>()
     }
 }
 
@@ -73,15 +71,9 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clear(&mut self);
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn get_dyn_query(&self, key_hash: &KeyHash) -> Option<&dyn crate::query::DynQuery>;
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery>;
     fn invalidate_queries(
         &mut self,
@@ -89,10 +81,7 @@ pub(crate) trait ScopeTrait: Busters + Send + Sync + 'static {
         invalidation_type: QueryAbortReason,
     ) -> Box<dyn FnOnce(&mut Scopes) -> Option<Box<dyn FnOnce()>>>;
     fn cache_key(&self) -> ScopeCacheKey;
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn title(&self) -> &Arc<String>;
     #[cfg(test)]
     fn total_cached_queries(&self) -> usize;
@@ -115,19 +104,12 @@ where
         self.clear_cache()
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn get_dyn_query(&self, key_hash: &KeyHash) -> Option<&dyn crate::query::DynQuery> {
-        self.get(key_hash)
-            .map(|query| query as &dyn crate::query::DynQuery)
+        self.get(key_hash).map(|query| query as &dyn crate::query::DynQuery)
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn iter_dyn_queries(&self) -> Vec<&dyn crate::query::DynQuery> {
         self.all_queries()
             .map(|query| query as &dyn crate::query::DynQuery)
@@ -169,10 +151,7 @@ where
         self.query_scope_info.cache_key
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     fn title(&self) -> &Arc<String> {
         &self.query_scope_info.title
     }
@@ -234,14 +213,11 @@ impl ScopeLookup {
     #[track_caller]
     pub fn scopes(&self) -> parking_lot::MappedRwLockReadGuard<'_, Scopes> {
         let location = std::panic::Location::caller();
-        parking_lot::RwLockReadGuard::map(
-            GLOBAL_SCOPE_LOOKUPS.read(),
-            |scope_lookups: &HashMap<u64, Scopes>| {
-                scope_lookups
-                    .get(&self.scope_id)
-                    .unwrap_or_else(|| panic!("leptos-fetch bug: scope not found at {location}",))
-            },
-        )
+        parking_lot::RwLockReadGuard::map(GLOBAL_SCOPE_LOOKUPS.read(), |scope_lookups: &HashMap<u64, Scopes>| {
+            scope_lookups
+                .get(&self.scope_id)
+                .unwrap_or_else(|| panic!("leptos-fetch bug: scope not found at {location}",))
+        })
     }
 
     pub fn scopes_mut(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Scopes> {
@@ -255,9 +231,7 @@ impl ScopeLookup {
         )
     }
 
-    pub fn invalidation_trie(
-        &self,
-    ) -> parking_lot::MappedMutexGuard<'_, Trie<(ScopeCacheKey, KeyHash)>> {
+    pub fn invalidation_trie(&self) -> parking_lot::MappedMutexGuard<'_, Trie<(ScopeCacheKey, KeyHash)>> {
         parking_lot::MutexGuard::map(
             GLOBAL_INVALIDATION_TRIE.lock(),
             |invalidation_trie: &mut HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>| {
@@ -268,9 +242,7 @@ impl ScopeLookup {
         )
     }
 
-    pub fn try_scope_subscriptions_mut(
-        &self,
-    ) -> Option<parking_lot::MappedMutexGuard<'_, ScopeSubs>> {
+    pub fn try_scope_subscriptions_mut(&self) -> Option<parking_lot::MappedMutexGuard<'_, ScopeSubs>> {
         let guard = GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS.lock();
         if !guard.contains_key(&self.scope_id) {
             return None;
@@ -278,9 +250,7 @@ impl ScopeLookup {
         Some(parking_lot::MutexGuard::map(
             guard,
             |sub_lookups: &mut HashMap<u64, ScopeSubs>| {
-                sub_lookups
-                    .get_mut(&self.scope_id)
-                    .expect("Scope not found (bug)")
+                sub_lookups.get_mut(&self.scope_id).expect("Scope not found (bug)")
             },
         ))
     }
@@ -289,9 +259,7 @@ impl ScopeLookup {
         parking_lot::MutexGuard::map(
             GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS.lock(),
             |sub_lookups: &mut HashMap<u64, ScopeSubs>| {
-                sub_lookups
-                    .get_mut(&self.scope_id)
-                    .expect("Scope not found (bug)")
+                sub_lookups.get_mut(&self.scope_id).expect("Scope not found (bug)")
             },
         )
     }
@@ -303,11 +271,8 @@ impl ScopeLookup {
         loading_first_time: bool,
         fut: impl Future<Output = T>,
     ) -> T {
-        self.scope_subscriptions_mut().notify_fetching_start(
-            cache_key,
-            key_hash,
-            loading_first_time,
-        );
+        self.scope_subscriptions_mut()
+            .notify_fetching_start(cache_key, key_hash, loading_first_time);
         // Notifying finished in a drop guard just in case e.g. future was cancelled to make sure still runs:
         // Not sure if this is actually needed, added it whilst trying to fix a different bug, may as well keep it:
         let _notify_fetching_finished_guard = OnDrop::new({
@@ -321,29 +286,18 @@ impl ScopeLookup {
         fut.await
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
-    pub fn client_subscriptions_mut(
-        &self,
-    ) -> parking_lot::MappedMutexGuard<'_, crate::subs_client::ClientSubs> {
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
+    pub fn client_subscriptions_mut(&self) -> parking_lot::MappedMutexGuard<'_, crate::subs_client::ClientSubs> {
         parking_lot::MutexGuard::map(
             crate::global::GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS.lock(),
             |sub_lookups: &mut HashMap<u64, crate::subs_client::ClientSubs>| {
-                sub_lookups
-                    .get_mut(&self.scope_id)
-                    .expect("Scope not found (bug)")
+                sub_lookups.get_mut(&self.scope_id).expect("Scope not found (bug)")
             },
         )
     }
 
-    pub fn mark_resource_dropped<K, V>(
-        &self,
-        key_hash: &KeyHash,
-        cache_key: &ScopeCacheKey,
-        resource_id: u64,
-    ) where
+    pub fn mark_resource_dropped<K, V>(&self, key_hash: &KeyHash, cache_key: &ScopeCacheKey, resource_id: u64)
+    where
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: 'static,
     {
@@ -418,16 +372,15 @@ impl ScopeLookup {
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
         let prehook_result = scopes_prehook(scopes);
-        let maybe_scope =
-            match scopes.entry(scope_cache_key) {
-                Entry::Occupied(entry) => Some(entry.into_mut()),
-                Entry::Vacant(entry) => match on_scope_missing {
-                    OnScopeMissing::Skip => None,
-                    OnScopeMissing::Create(query_scope_info) => Some(entry.insert(Box::new(
-                        Scope::<K, V>::new(*self, query_scope_info.clone()),
-                    ))),
-                },
-            };
+        let maybe_scope = match scopes.entry(scope_cache_key) {
+            Entry::Occupied(entry) => Some(entry.into_mut()),
+            Entry::Vacant(entry) => match on_scope_missing {
+                OnScopeMissing::Skip => None,
+                OnScopeMissing::Create(query_scope_info) => {
+                    Some(entry.insert(Box::new(Scope::<K, V>::new(*self, query_scope_info.clone()))))
+                }
+            },
+        };
 
         if let Some(scope) = maybe_scope {
             cb(
@@ -475,8 +428,7 @@ impl ScopeLookup {
         K: DebugIfDevtoolsEnabled + Clone + 'static,
         V: DebugIfDevtoolsEnabled + Clone + 'static,
     {
-        let (query_abort_tx, query_abort_rx) =
-            futures::channel::oneshot::channel::<QueryAbortReason>();
+        let (query_abort_tx, query_abort_rx) = futures::channel::oneshot::channel::<QueryAbortReason>();
         self.with_cached_scope_mut::<K, V, _, _>(
             &mut self.scopes_mut(),
             query_scope_info.cache_key,

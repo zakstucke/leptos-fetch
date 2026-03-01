@@ -11,10 +11,7 @@ mod arc_local_signal;
 mod cache;
 mod cache_scope;
 mod debug_if_devtools_enabled;
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 mod events;
 mod global;
 mod maybe_local;
@@ -26,10 +23,7 @@ mod query_maybe_key;
 mod query_options;
 mod query_scope;
 mod resource_drop_guard;
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 mod subs_client;
 mod subs_scope;
 mod trie;
@@ -62,9 +56,7 @@ mod test {
     };
 
     use futures::future::Either;
-    use hydration_context::{
-        PinnedFuture, PinnedStream, SerializedDataId, SharedContext, SsrSharedContext,
-    };
+    use hydration_context::{PinnedFuture, PinnedStream, SerializedDataId, SharedContext, SsrSharedContext};
 
     use any_spawner::Executor;
     use leptos::{error::ErrorId, prelude::*};
@@ -167,13 +159,7 @@ mod test {
         }
 
         #[inline(always)]
-        fn register_error(
-            &self,
-            _error_boundary: SerializedDataId,
-            _error_id: ErrorId,
-            _error: leptos::error::Error,
-        ) {
-        }
+        fn register_error(&self, _error_boundary: SerializedDataId, _error_id: ErrorId, _error: leptos::error::Error) {}
 
         #[inline(always)]
         fn seal_errors(&self, _boundary_id: &SerializedDataId) {}
@@ -216,9 +202,7 @@ mod test {
     macro_rules! prep_client {
         () => {{
             _ = Executor::init_tokio();
-            let owner = Owner::new_root(Some(Arc::new(
-                crate::test::MockHydrateSharedContext::new(None).await,
-            )));
+            let owner = Owner::new_root(Some(Arc::new(crate::test::MockHydrateSharedContext::new(None).await)));
             owner.set();
             provide_context(crate::test::ExampleCtx);
             let client = QueryClient::new();
@@ -258,7 +242,6 @@ mod test {
             tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         };
     }
-    pub(crate) use tick;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ResourceType {
@@ -277,12 +260,8 @@ mod test {
     }
 
     impl InvalidationType {
-        fn invalidate<K, V, M>(
-            &self,
-            client: &QueryClient,
-            query_scope: impl QueryScopeLocalTrait<K, V, M>,
-            key: &K,
-        ) where
+        fn invalidate<K, V, M>(&self, client: &QueryClient, query_scope: impl QueryScopeLocalTrait<K, V, M>, key: &K)
+        where
             K: Debug + Hash + PartialEq + Eq + Clone + 'static,
             V: Debug + Clone + 'static,
         {
@@ -294,8 +273,7 @@ mod test {
                     client.invalidate_query_scope(query_scope);
                 }
                 InvalidationType::Predicate => {
-                    client
-                        .invalidate_queries_with_predicate(query_scope, |test_key| test_key == key);
+                    client.invalidate_queries_with_predicate(query_scope, |test_key| test_key == key);
                 }
                 InvalidationType::All => {
                     client.invalidate_all_queries();
@@ -345,8 +323,7 @@ mod test {
                 expect_context::<ExampleCtx>();
                 async move {
                     expect_context::<ExampleCtx>();
-                    tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_FETCHER_MS))
-                        .await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_FETCHER_MS)).await;
                     expect_context::<ExampleCtx>();
                     fetch_calls.fetch_add(1, Ordering::Relaxed);
                     key * 2
@@ -393,8 +370,7 @@ mod test {
                 let (fetcher, _fetch_calls) = default_fetcher();
 
                 let (client_default, _guard, _owner) = prep_vari!(server_ctx);
-                let client_custom =
-                    QueryClient::new().set_codec::<codee::binary::FromToBytesCodec>();
+                let client_custom = QueryClient::new().set_codec::<codee::binary::FromToBytesCodec>();
                 use_context::<QueryClient>();
                 use_context::<QueryClient<codee::binary::FromToBytesCodec>>();
 
@@ -408,22 +384,8 @@ mod test {
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client_default,
-                    fetcher.clone(),
-                    move || 2,
-                    resource_type,
-                    arc
-                );
-                vari_new_resource_with_cb!(
-                    check,
-                    client_custom,
-                    fetcher.clone(),
-                    move || 2,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client_default, fetcher.clone(), move || 2, resource_type, arc);
+                vari_new_resource_with_cb!(check, client_custom, fetcher.clone(), move || 2, resource_type, arc);
             })
             .await;
     }
@@ -445,26 +407,16 @@ mod test {
                 }
 
                 assert_eq!(client.fetch_query(fn_no_arg, ()).await, "no_arg");
+                assert_eq!(client.fetch_query(fn_with_arg, "with_arg").await, "with_arg");
+
+                assert_eq!(client.fetch_query(QueryScope::new(fn_no_arg), ()).await, "no_arg");
                 assert_eq!(
-                    client.fetch_query(fn_with_arg, "with_arg").await,
+                    client.fetch_query(QueryScope::new(fn_with_arg), "with_arg").await,
                     "with_arg"
                 );
 
                 assert_eq!(
-                    client.fetch_query(QueryScope::new(fn_no_arg), ()).await,
-                    "no_arg"
-                );
-                assert_eq!(
-                    client
-                        .fetch_query(QueryScope::new(fn_with_arg), "with_arg")
-                        .await,
-                    "with_arg"
-                );
-
-                assert_eq!(
-                    client
-                        .fetch_query_local(QueryScopeLocal::new(fn_no_arg), ())
-                        .await,
+                    client.fetch_query_local(QueryScopeLocal::new(fn_no_arg), ()).await,
                     "no_arg"
                 );
                 assert_eq!(
@@ -541,13 +493,9 @@ mod test {
         tokio::task::LocalSet::new()
             .run_until(async move {
                 let (client, _guard, _owner) = prep_vari!(false);
-                assert!(does_scope_id_exist(
-                    client.untyped_client.scope_lookup.scope_id
-                ));
+                assert!(does_scope_id_exist(client.untyped_client.scope_lookup.scope_id));
                 drop(_owner);
-                assert!(!does_scope_id_exist(
-                    client.untyped_client.scope_lookup.scope_id
-                ));
+                assert!(!does_scope_id_exist(client.untyped_client.scope_lookup.scope_id));
             })
             .await;
     }
@@ -599,7 +547,8 @@ mod test {
                     }
                 );
 
-                // When wanting to load more items, update_query_async can be called declaratively to update the cached item:
+                // When wanting to load more items, update_query_async can be called
+                // declaratively to update the cached item:
                 client
                     .update_query_async(get_list_query, (), async |last| {
                         if last.more_available {
@@ -642,7 +591,9 @@ mod test {
 
                 let key = 1;
 
-                // Want to confirm by default everything triggers updates, but when using `.untrack_update_query()` magic fn for those applicable it doesn't.
+                // Want to confirm by default everything triggers updates, but when
+                // using `.untrack_update_query()` magic fn for those applicable
+                // it doesn't.
                 let value_sub_react_count = Arc::new(AtomicUsize::new(0));
                 let value_sub = client.subscribe_value(&fetcher, move || key);
                 Effect::new_isomorphic({
@@ -743,10 +694,7 @@ mod test {
 
                 assert!(client.untyped_client.clear_query(&fetcher, key));
                 assert!(!client.query_exists(&fetcher, key));
-                maybe_reacts!(
-                    true,
-                    assert_eq!(client.fetch_query_local(&fetcher, key).await, 2)
-                );
+                maybe_reacts!(true, assert_eq!(client.fetch_query_local(&fetcher, key).await, 2));
                 assert!(client.query_exists(&fetcher, key));
                 client.clear();
                 assert_eq!(client.total_cached_queries(), 0);
@@ -767,18 +715,11 @@ mod test {
                 );
                 assert_eq!(client.get_cached_query(&fetcher, key), Some(3));
                 // Noop would react, but not if client.untrack_update_query() is used:
-                maybe_reacts!(
-                    true,
-                    client
-                        .update_query_async(&fetcher, key, async |_value| {})
-                        .await
-                );
+                maybe_reacts!(true, client.update_query_async(&fetcher, key, async |_value| {}).await);
                 maybe_reacts!(
                     false,
                     client
-                        .update_query_async(&fetcher, key, async |_value| {
-                            client.untrack_update_query()
-                        })
+                        .update_query_async(&fetcher, key, async |_value| { client.untrack_update_query() })
                         .await
                 );
 
@@ -798,20 +739,17 @@ mod test {
                 // Noop would react, but not if client.untrack_update_query() is used:
                 maybe_reacts!(
                     true,
-                    client
-                        .update_query_async_local(&fetcher, key, async |_value| {})
-                        .await
+                    client.update_query_async_local(&fetcher, key, async |_value| {}).await
                 );
                 maybe_reacts!(
                     false,
                     client
-                        .update_query_async_local(&fetcher, key, async |_value| {
-                            client.untrack_update_query()
-                        })
+                        .update_query_async_local(&fetcher, key, async |_value| { client.untrack_update_query() })
                         .await
                 );
 
-                // is_fetching should be true throughout the whole lifetime of update_query_async, even the external async section:
+                // is_fetching should be true throughout the whole lifetime of
+                // update_query_async, even the external async section:
                 let is_fetching = client.subscribe_is_fetching_arc(fetcher.clone(), move || key);
                 assert!(!is_fetching.get_untracked());
                 tokio::join!(
@@ -819,8 +757,7 @@ mod test {
                         assert_eq!(
                             client
                                 .update_query_async(&fetcher, key, async |value| {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(30))
-                                        .await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
                                     *value += 1;
                                     *value
                                 })
@@ -872,9 +809,9 @@ mod test {
                         }
                     }
                 };
-                let fetcher = QueryScope::new(
-                    fetcher
-                ).with_options(QueryOptions::new().with_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)));
+                let fetcher = QueryScope::new(fetcher).with_options(
+                    QueryOptions::new().with_refetch_interval(std::time::Duration::from_millis(REFETCH_TIME_MS)),
+                );
 
                 let (mut client, _guard, owner) = prep_vari!(false);
                 let refetch_enabled = ArcRwSignal::new(true);
@@ -895,10 +832,8 @@ mod test {
 
                 macro_rules! check {
                     ($get_resource:expr) => {{
-
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
-
                             // Initial caching:
                             with_tmp_owner! {{
                                 assert_eq!($get_resource().await, 4);
@@ -911,21 +846,32 @@ mod test {
                                 assert_eq!(client.total_cached_queries(), 1);
                             }}
 
-                            // hit refetch time with no active resources shouldn't have refetched:
-                            tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                            // hit refetch time with no active resources shouldn't
+                            // have refetched:
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                REFETCH_TIME_MS + FETCH_TIME_MS,
+                            ))
+                            .await;
                             tick!();
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             // hit refetch_time when active resource should refetch:
                             with_tmp_owner! {{
-                                // Because the refetch call would've still invalidated the value, the new resource should trigger the refetch automatically:
+                                // Because the refetch call would've still
+                                // invalidated the value, the new resource should
+                                // trigger the refetch automatically:
                                 let _resource = $get_resource();
                                 tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_TIME_MS)).await;
                                 tick!();
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
 
-                                // There's an active resource now, so this should trigger again without needing to touch the resources:
-                                tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                                // There's an active resource now, so this should
+                                // trigger again without needing to touch the
+                                // resources:
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    REFETCH_TIME_MS + FETCH_TIME_MS,
+                                ))
+                                .await;
                                 tick!();
 
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 3);
@@ -935,7 +881,10 @@ mod test {
                                 if set_refetch_enabled {
                                     // Disable refetching, should skip this:
                                     refetch_enabled.set(false);
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                                        REFETCH_TIME_MS + FETCH_TIME_MS,
+                                    ))
+                                    .await;
                                     tick!();
 
                                     assert_eq!(fetch_calls.load(Ordering::Relaxed), 3);
@@ -946,7 +895,10 @@ mod test {
                                     refetch_enabled.set(true);
                                 }
 
-                                tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(
+                                    REFETCH_TIME_MS + FETCH_TIME_MS,
+                                ))
+                                .await;
                                 tick!();
 
                                 assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);
@@ -955,21 +907,17 @@ mod test {
                             }}
 
                             // Should stop refetching once all resources are dropped:
-                            tokio::time::sleep(tokio::time::Duration::from_millis(REFETCH_TIME_MS + FETCH_TIME_MS)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(
+                                REFETCH_TIME_MS + FETCH_TIME_MS,
+                            ))
+                            .await;
                             tick!();
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 4);
                         }
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    || 2,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), || 2, resource_type, arc);
             })
             .await;
     }
@@ -1036,7 +984,7 @@ mod test {
     ) {
         identify_parking_lot_deadlocks();
         tokio::task::LocalSet::new()
-        .run_until(async move {
+            .run_until(async move {
                 const GC_TIME_MS: u64 = 30;
 
                 let fetch_calls = Arc::new(AtomicUsize::new(0));
@@ -1051,11 +999,8 @@ mod test {
                     }
                 };
 
-
-
-                let fetcher = QueryScope::new(
-                    fetcher
-                ).with_options(QueryOptions::new().with_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
+                let fetcher = QueryScope::new(fetcher)
+                    .with_options(QueryOptions::new().with_gc_time(std::time::Duration::from_millis(GC_TIME_MS)));
 
                 let gc_counts = Arc::new(parking_lot::Mutex::new(HashMap::new()));
                 let fetcher = fetcher.on_gc({
@@ -1085,7 +1030,6 @@ mod test {
 
                         // On the server cannot actually run local resources:
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
-
                             // Initial caching:
                             with_tmp_owner! {{
                                 assert_eq!($get_resource().await, 4);
@@ -1151,14 +1095,7 @@ mod test {
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    || 2,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), || 2, resource_type, arc);
             })
             .await;
     }
@@ -1280,7 +1217,6 @@ mod test {
                             assert_eq!(is_loading_other.get_untracked(), false);
                             assert_eq!(client.subscriber_count(), 4);
 
-
                             macro_rules! check_all {
                                 ($expected:expr) => {{
                                     assert_eq!(is_fetching.get_untracked(), $expected);
@@ -1338,7 +1274,9 @@ mod test {
                             tokio::join!(
                                 async {
                                     assert_eq!($get_resource().await, 4);
-                                    // This should have returned the old value straight away, but the refetch will have been initiated in the background:
+                                    // This should have returned the old value
+                                    // straight away, but the refetch will have
+                                    // been initiated in the background:
                                     assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
                                     tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                                 },
@@ -1348,8 +1286,11 @@ mod test {
                                     while elapsed.elapsed().as_millis() < DEFAULT_FETCHER_MS.into() {
                                         assert_eq!(is_fetching.get_untracked(), true);
                                         assert_eq!(is_fetching_other.get_untracked(), false);
-                                        // Loading should all be false as this is just a refetch now, 
-                                        // the get_resource().await will actually return straight away, but it'll trigger the refetch.
+                                        // Loading should all be false as this is
+                                        // just a refetch now, the
+                                        // get_resource().await will actually
+                                        // return straight away, but it'll
+                                        // trigger the refetch.
                                         assert_eq!(is_loading.get_untracked(), false);
                                         assert_eq!(is_loading_other.get_untracked(), false);
                                         tick!();
@@ -1414,10 +1355,13 @@ mod test {
                             assert_eq!(client.subscriber_count(), 0);
                             client.clear();
 
-                            // Now confirm the subscriber's keyer changes are respected, and subscriptions don't accidentally say true for the wrong key:
+                            // Now confirm the subscriber's keyer changes are
+                            // respected, and subscriptions don't accidentally
+                            // say true for the wrong key:
                             let sub_key_signal = RwSignal::new(2);
                             let resource_key_signal = RwSignal::new(2);
-                            let is_fetching = client.subscribe_is_fetching(fetcher.clone(), move || sub_key_signal.get());
+                            let is_fetching =
+                                client.subscribe_is_fetching(fetcher.clone(), move || sub_key_signal.get());
                             let is_loading = client.subscribe_is_loading(fetcher.clone(), move || sub_key_signal.get());
                             assert_eq!(is_fetching.get_untracked(), false);
                             assert_eq!(is_loading.get_untracked(), false);
@@ -1466,14 +1410,15 @@ mod test {
                             tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             assert_eq!(client.get_cached_query(fetcher.clone(), &4), Some(8));
 
-                            // Now confirm the keyer is actually reactive, and is able to trigger updates itself. 
+                            // Now confirm the keyer is actually reactive, and is able to trigger updates itself.
                             // Do this by subscribing to is_fetching in an effect, and update the key in the keyer.
                             let last_is_fetching_value = Arc::new(parking_lot::Mutex::new(None));
                             Effect::new_isomorphic({
                                 let last_is_fetching_value = last_is_fetching_value.clone();
                                 move || {
                                     *last_is_fetching_value.lock() = Some(is_fetching.get());
-                            }});
+                                }
+                            });
                             assert_eq!(*last_is_fetching_value.lock(), None);
                             tick!();
                             assert_eq!(*last_is_fetching_value.lock(), Some(false));
@@ -1491,14 +1436,7 @@ mod test {
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    || 2,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), || 2, resource_type, arc);
             })
             .await;
     }
@@ -1530,10 +1468,8 @@ mod test {
                         if cfg!(not(feature = "ssr")) || resource_type != ResourceType::Local {
                             assert_eq!($get_resource().await, None);
 
-                            let sub_is_loading =
-                                client.subscribe_is_loading(fetcher.clone(), keyer);
-                            let sub_is_fetching =
-                                client.subscribe_is_fetching(fetcher.clone(), keyer);
+                            let sub_is_loading = client.subscribe_is_loading(fetcher.clone(), keyer);
+                            let sub_is_fetching = client.subscribe_is_fetching(fetcher.clone(), keyer);
                             let sub_value = client.subscribe_value(fetcher.clone(), keyer);
 
                             assert_eq!(sub_is_loading.get_untracked(), false);
@@ -1555,14 +1491,7 @@ mod test {
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    keyer,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), keyer, resource_type, arc);
             })
             .await;
     }
@@ -1622,26 +1551,19 @@ mod test {
                             assert_eq!($get_resource().await, 4);
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
-                            assert_eq!(
-                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
-                                0
-                            );
+                            assert_eq!(*invalidation_counts.lock().get(&2).unwrap_or(&0), 0);
                             invalidation_type.invalidate(&client, fetcher.clone(), &2);
-                            assert_eq!(
-                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
-                                1
-                            );
+                            assert_eq!(*invalidation_counts.lock().get(&2).unwrap_or(&0), 1);
 
                             // A second invalidation on something that's already invalid,
                             // should not trigger the on_invalidation callback again:
                             invalidation_type.invalidate(&client, fetcher.clone(), &2);
-                            assert_eq!(
-                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
-                                1
-                            );
+                            assert_eq!(*invalidation_counts.lock().get(&2).unwrap_or(&0), 1);
 
-                            // Other than clear, because it should now be stale, not gc'd,
-                            // sync fns on a new resource instance should still return the value, it just means a background refresh has been triggered:
+                            // Other than clear, because it should now be stale,
+                            // not gc'd, sync fns on a new resource instance
+                            // should still return the value, it just means a
+                            // background refresh has been triggered:
                             let resource2 = $get_resource();
                             tick!();
                             if matches!(invalidation_type, InvalidationType::Clear) {
@@ -1651,7 +1573,9 @@ mod test {
                             }
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
-                            // Because the resource should've been auto invalidated, a tick should cause it to auto refetch:
+                            // Because the resource should've been auto
+                            // invalidated, a tick should cause it to auto
+                            // refetch:
                             tick!();
                             tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
@@ -1659,27 +1583,14 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 2);
 
                             // Invalidation callback should repeatedly work:
-                            assert_eq!(
-                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
-                                1
-                            );
+                            assert_eq!(*invalidation_counts.lock().get(&2).unwrap_or(&0), 1);
                             invalidation_type.invalidate(&client, fetcher.clone(), &2);
-                            assert_eq!(
-                                *invalidation_counts.lock().get(&2).unwrap_or(&0),
-                                2
-                            );
+                            assert_eq!(*invalidation_counts.lock().get(&2).unwrap_or(&0), 2);
                         }
                     }};
                 }
 
-                vari_new_resource_with_cb!(
-                    check,
-                    client,
-                    fetcher.clone(),
-                    || 2,
-                    resource_type,
-                    arc
-                );
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), || 2, resource_type, arc);
             })
             .await;
     }
@@ -1728,8 +1639,7 @@ mod test {
                         let num_completed_calls = num_completed_calls.clone();
                         async move {
                             num_calls.fetch_add(1, Ordering::Relaxed);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS))
-                                .await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS)).await;
                             num_completed_calls.fetch_add(1, Ordering::Relaxed);
                             "initial_value"
                         }
@@ -1746,10 +1656,7 @@ mod test {
                     FetchQueryType::UpdateAsync => Either::Right(Either::Left(async {
                         client
                             .update_query_async(query_scope.clone(), (), async |value| {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(
-                                    UPDATE_SLEEP_MS,
-                                ))
-                                .await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(UPDATE_SLEEP_MS)).await;
                                 *value = "modified_value";
                             })
                             .await;
@@ -1757,10 +1664,7 @@ mod test {
                     FetchQueryType::UpdateAsyncLocal => Either::Right(Either::Right(async {
                         client
                             .update_query_async_local(query_scope.clone(), (), async |value| {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(
-                                    UPDATE_SLEEP_MS,
-                                ))
-                                .await;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(UPDATE_SLEEP_MS)).await;
                                 *value = "modified_value";
                             })
                             .await;
@@ -1770,8 +1674,7 @@ mod test {
                 let (_, _) = tokio::join!(
                     async {
                         // Wait for the fetch to start before invalidating:
-                        tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS / 2))
-                            .await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(FETCH_SLEEP_MS / 2)).await;
                         invalidation_type.invalidate(&client, query_scope.clone(), &());
                     },
                     async {
@@ -1787,15 +1690,15 @@ mod test {
 
                 // In general we treat update functions as resetting any invalid = true,
                 // however if an async update user fn test, need to check that:
-                // - when cleared during the user update async fn (after the query pull), the value isn't set, as would be stale
-                // - opposite for invalidate, these should still be set, as should make the invalidated query "less stale", shouldn't override the new invalidated status though.
+                // - when cleared during the user update async fn (after the
+                //   query pull), the value isn't set, as would be stale
+                // - opposite for invalidate, these should still be set, as
+                //   should make the invalidated query "less stale", shouldn't
+                //   override the new invalidated status though.
                 if matches!(fetch_query_type, FetchQueryType::UpdateAsync)
                     || matches!(fetch_query_type, FetchQueryType::UpdateAsyncLocal)
                 {
-                    assert_eq!(
-                        client.get_cached_query(query_scope.clone(), ()),
-                        Some("modified_value")
-                    );
+                    assert_eq!(client.get_cached_query(query_scope.clone(), ()), Some("modified_value"));
                     // Clear so the fetch sleep should be accounted for below:
                     client.clear();
                     let (_, _) = tokio::join!(
@@ -1814,10 +1717,7 @@ mod test {
                     if matches!(invalidation_type, InvalidationType::Clear) {
                         assert_eq!(client.get_cached_query(query_scope.clone(), ()), None);
                     } else {
-                        assert_eq!(
-                            client.get_cached_query(query_scope.clone(), ()),
-                            Some("modified_value")
-                        );
+                        assert_eq!(client.get_cached_query(query_scope.clone(), ()), Some("modified_value"));
                         // Should still be invalid:
                         assert!(client.is_key_invalid(query_scope.clone(), ()));
                     }
@@ -1841,29 +1741,23 @@ mod test {
                 assert!(!client.is_key_invalid(&fetcher, 2));
 
                 // If this is invalidated, it'll invalidate both the main fetcher and the child resource.
-                let hierarchy_parent_scope =
-                    QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
-                client
-                    .fetch_query(hierarchy_parent_scope.clone(), &())
-                    .await;
+                let hierarchy_parent_scope = QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
+                client.fetch_query(hierarchy_parent_scope.clone(), &()).await;
                 assert!(!client.is_key_invalid(&hierarchy_parent_scope, ()));
 
-                // If this is invalidated, it shouldn't affect either of the others, as it's the lowest in the invalidation hierarchy.
-                let hierarchy_child_scope = QueryScope::new(async |user_id| user_id)
-                    .with_invalidation_link(|user_id: &usize| {
+                // If this is invalidated, it shouldn't affect either of the
+                // others, as it's the lowest in the invalidation hierarchy.
+                let hierarchy_child_scope =
+                    QueryScope::new(async |user_id| user_id).with_invalidation_link(|user_id: &usize| {
                         ["base".to_string(), "users".to_string(), user_id.to_string()]
                     });
-                client
-                    .fetch_query(hierarchy_child_scope.clone(), &100)
-                    .await;
+                client.fetch_query(hierarchy_child_scope.clone(), &100).await;
                 assert!(!client.is_key_invalid(&hierarchy_child_scope, 100));
 
-                // Should be invalidated when the hierarchy_parent_scope and vice versa, siblings should invalidate each other
-                let hierarchy_sibling_scope =
-                    QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
-                client
-                    .fetch_query(hierarchy_sibling_scope.clone(), &())
-                    .await;
+                // Should be invalidated when the hierarchy_parent_scope and
+                // vice versa, siblings should invalidate each other
+                let hierarchy_sibling_scope = QueryScope::new(async || ()).with_invalidation_link(|_k| ["base"]);
+                client.fetch_query(hierarchy_sibling_scope.clone(), &()).await;
                 assert!(!client.is_key_invalid(&hierarchy_sibling_scope, ()));
 
                 client.invalidate_query(&hierarchy_parent_scope, ());
@@ -1875,9 +1769,7 @@ mod test {
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
                 client.fetch_query(&fetcher, &2).await;
-                client
-                    .fetch_query(hierarchy_child_scope.clone(), &100)
-                    .await;
+                client.fetch_query(hierarchy_child_scope.clone(), &100).await;
 
                 client.invalidate_query(&fetcher, 2);
                 tick!();
@@ -1888,9 +1780,7 @@ mod test {
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
                 client.fetch_query(&fetcher, &2).await;
-                client
-                    .fetch_query(hierarchy_child_scope.clone(), &100)
-                    .await;
+                client.fetch_query(hierarchy_child_scope.clone(), &100).await;
 
                 client.invalidate_query(&hierarchy_child_scope, 100);
                 tick!();
@@ -1902,9 +1792,7 @@ mod test {
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
                 client.fetch_query(&fetcher, &2).await;
-                client
-                    .fetch_query(hierarchy_sibling_scope.clone(), &())
-                    .await;
+                client.fetch_query(hierarchy_sibling_scope.clone(), &()).await;
                 client.invalidate_query(&hierarchy_sibling_scope, ());
                 tick!();
                 assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
@@ -1914,9 +1802,7 @@ mod test {
                 // Reset:
                 client.fetch_query(&hierarchy_parent_scope, &()).await;
                 client.fetch_query(&fetcher, &2).await;
-                client
-                    .fetch_query(hierarchy_sibling_scope.clone(), &())
-                    .await;
+                client.fetch_query(hierarchy_sibling_scope.clone(), &()).await;
                 client.invalidate_query(&hierarchy_parent_scope, ());
                 tick!();
                 assert!(client.is_key_invalid(&hierarchy_parent_scope, ()));
@@ -2017,8 +1903,7 @@ mod test {
                 macro_rules! check {
                     ($get_resource:expr) => {{
                         let resource = $get_resource();
-                        let subscribed =
-                            client.subscribe_value(fetcher.clone(), move || add_size.get());
+                        let subscribed = client.subscribe_value(fetcher.clone(), move || add_size.get());
 
                         // Should be None initially with the sync methods:
                         assert!(resource.get_untracked().is_none());
@@ -2045,10 +1930,7 @@ mod test {
                             assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
 
                             // Wait for the new to complete:
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                DEFAULT_FETCHER_MS + 10,
-                            ))
-                            .await;
+                            tokio::time::sleep(std::time::Duration::from_millis(DEFAULT_FETCHER_MS + 10)).await;
                             tick!();
 
                             // Should have updated to the new value:
@@ -2102,14 +1984,7 @@ mod test {
                                 resource.await
                             }};
                         }
-                        vari_new_resource_with_cb!(
-                            cb,
-                            client,
-                            fetcher,
-                            move || key,
-                            resource_type,
-                            arc
-                        )
+                        vari_new_resource_with_cb!(cb, client, fetcher, move || key, resource_type, arc)
                     }
                 }))
                 .await;
@@ -2126,14 +2001,7 @@ mod test {
                                 resource.await
                             }};
                         }
-                        vari_new_resource_with_cb!(
-                            cb,
-                            client,
-                            fetcher,
-                            move || key,
-                            resource_type,
-                            arc
-                        )
+                        vari_new_resource_with_cb!(cb, client, fetcher, move || key, resource_type, arc)
                     }
                 }))
                 .await;
@@ -2200,10 +2068,7 @@ mod test {
                             fetch_calls.fetch_add(1, Ordering::Relaxed);
                             async move {
                                 if let Some(sleep_ms) = maybe_sleep_ms {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                                        *sleep_ms as u64,
-                                    ))
-                                    .await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(*sleep_ms as u64)).await;
                                 }
                                 key * 2
                             }
@@ -2257,14 +2122,9 @@ mod test {
 
                     // Wait for all 4 together, should still only have had 1 fetch.
                     let results = futures::future::join_all(
-                        vec![
-                            hydrate_resource_2,
-                            ssr_resource_1,
-                            ssr_resource_2,
-                            hydrate_resource_1,
-                        ]
-                        .into_iter()
-                        .map(|resource| async move { resource.await }),
+                        vec![hydrate_resource_2, ssr_resource_1, ssr_resource_2, hydrate_resource_1]
+                            .into_iter()
+                            .map(|resource| async move { resource.await }),
                     )
                     .await
                     .into_iter()
@@ -2275,13 +2135,10 @@ mod test {
 
                     tick!();
 
-                    // This didn't have a matching backend one so should be using the populated cache and still not fetch:
+                    // This didn't have a matching backend one so should be
+                    // using the populated cache and still not fetch:
                     assert_eq!(hydrate_client.arc_resource(fetcher.clone(), keyer).await, 2);
-                    assert_eq!(
-                        fetch_calls.load(Ordering::Relaxed),
-                        1,
-                        "{maybe_sleep_ms:?}ms"
-                    );
+                    assert_eq!(fetch_calls.load(Ordering::Relaxed), 1, "{maybe_sleep_ms:?}ms");
                 }
             })
             .await;

@@ -6,14 +6,10 @@ use std::{
 use leptos::prelude::{Owner, ScopedFuture, TimeoutHandle, untrack};
 
 use crate::{
-    UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture,
-    query_scope::ScopeCacheKey,
+    UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture, query_scope::ScopeCacheKey,
 };
 
-pub(crate) fn provide_cb_contexts(
-    untyped_client: UntypedQueryClient,
-    scope_cache_key: ScopeCacheKey,
-) {
+pub(crate) fn provide_cb_contexts(untyped_client: UntypedQueryClient, scope_cache_key: ScopeCacheKey) {
     leptos::context::provide_context(untyped_client);
     leptos::context::provide_context(scope_cache_key);
 }
@@ -54,10 +50,7 @@ defined_id_gen!(new_scope_id);
 defined_id_gen!(new_buster_id);
 defined_id_gen!(new_sub_listener_id);
 defined_id_gen!(new_value_modified_id);
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 defined_id_gen!(new_subscription_id);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,20 +70,14 @@ impl Hash for KeyHash {
     }
 }
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 #[derive(Clone, Debug)]
 pub(crate) struct DebugValue {
     pretty: std::sync::Arc<String>,
     compact: std::sync::Arc<String>,
 }
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 impl DebugValue {
     pub fn new<T: std::fmt::Debug>(value: &T) -> Self {
         Self {
@@ -144,10 +131,7 @@ pub(crate) enum ResetInvalidated {
 /// Works around potential panic reported in https://github.com/zakstucke/leptos-fetch/issues/43
 /// until my internal fix is upstreamed into leptos (https://github.com/leptos-rs/leptos/pull/4212)
 #[track_caller]
-pub(crate) fn safe_set_timeout(
-    cb: impl FnOnce() + 'static,
-    duration: std::time::Duration,
-) -> TimeoutHandle {
+pub(crate) fn safe_set_timeout(cb: impl FnOnce() + 'static, duration: std::time::Duration) -> TimeoutHandle {
     leptos::prelude::set_timeout_with_handle(
         cb,
         if duration.as_millis() > i32::MAX as _ {
@@ -167,11 +151,7 @@ pub(crate) struct OwnerChain(Arc<Vec<Owner>>);
 /// Will run the query in a fresh child owner.
 /// The owner will contain the context of the current client.
 impl OwnerChain {
-    pub fn new(
-        untyped_client: UntypedQueryClient,
-        scope_cache_key: ScopeCacheKey,
-        owner: Option<Owner>,
-    ) -> Self {
+    pub fn new(untyped_client: UntypedQueryClient, scope_cache_key: ScopeCacheKey, owner: Option<Owner>) -> Self {
         let active_owner = match &owner {
             Some(o) => o.child(),
             None => Owner::default(),
@@ -202,7 +182,8 @@ impl OwnerChain {
         Fut: Future<Output = T>,
     {
         if let Some(owner) = self.active_owner() {
-            // Explicitly disabling diagnostics and removing observer to prevent "leak through" reactivity in local resources
+            // Explicitly disabling diagnostics and removing observer to prevent
+            // "leak through" reactivity in local resources
             owner
                 .with(|| ScopedFuture::new_untracked(NoReactiveDiagnosticsFuture::new(untrack(f))))
                 .await

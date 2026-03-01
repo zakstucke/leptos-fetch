@@ -11,18 +11,13 @@ use crate::{
 pub(crate) static GLOBAL_SCOPE_LOOKUPS: LazyLock<parking_lot::RwLock<HashMap<u64, Scopes>>> =
     LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
 
-pub(crate) static GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS: LazyLock<
-    parking_lot::Mutex<HashMap<u64, ScopeSubs>>,
-> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+pub(crate) static GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS: LazyLock<parking_lot::Mutex<HashMap<u64, ScopeSubs>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-pub(crate) static GLOBAL_INVALIDATION_TRIE: LazyLock<
-    parking_lot::Mutex<HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>>,
-> = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+pub(crate) static GLOBAL_INVALIDATION_TRIE: LazyLock<parking_lot::Mutex<HashMap<u64, Trie<(ScopeCacheKey, KeyHash)>>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 pub(crate) static GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS: LazyLock<
     parking_lot::Mutex<HashMap<u64, crate::subs_client::ClientSubs>>,
 > = LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
@@ -47,14 +42,10 @@ impl ScopeLookup {
         GLOBAL_INVALIDATION_TRIE
             .lock()
             .insert(scope_lookup.scope_id, Default::default());
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
-        GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS.lock().insert(
-            scope_lookup.scope_id,
-            crate::subs_client::ClientSubs::new(scope_lookup),
-        );
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
+        GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS
+            .lock()
+            .insert(scope_lookup.scope_id, crate::subs_client::ClientSubs::new(scope_lookup));
 
         // println!(
         //     "Post insert of scope_id {scope_id}, cache size: {}",
@@ -68,10 +59,7 @@ impl ScopeLookup {
             GLOBAL_SCOPE_LOOKUPS.write().remove(&scope_id);
             GLOBAL_SCOPE_SUBSCRIPTION_LOOKUPS.lock().remove(&scope_id);
             GLOBAL_INVALIDATION_TRIE.lock().remove(&scope_id);
-            #[cfg(any(
-                all(debug_assertions, feature = "devtools"),
-                feature = "devtools-always"
-            ))]
+            #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
             GLOBAL_CLIENT_SUBSCRIPTION_LOOKUPS.lock().remove(&scope_id);
             // println!("Cleaned up scope_id {scope_id}",);
         });

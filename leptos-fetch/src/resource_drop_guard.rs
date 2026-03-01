@@ -3,8 +3,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::{
-    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled,
-    query_scope::ScopeCacheKey, utils::KeyHash,
+    cache::ScopeLookup, debug_if_devtools_enabled::DebugIfDevtoolsEnabled, query_scope::ScopeCacheKey, utils::KeyHash,
 };
 
 #[derive(Clone)]
@@ -35,11 +34,9 @@ where
         if let Some(old_active_key_hash) = guard.active_key_hash
             && old_active_key_hash != active_key_hash
         {
-            guard.scope_lookup.mark_resource_dropped::<K, V>(
-                &old_active_key_hash,
-                &guard.cache_key,
-                guard.resource_id,
-            );
+            guard
+                .scope_lookup
+                .mark_resource_dropped::<K, V>(&old_active_key_hash, &guard.cache_key, guard.resource_id);
         }
         guard.active_key_hash = Some(active_key_hash);
     }
@@ -65,11 +62,8 @@ where
 {
     fn drop(&mut self) {
         if let Some(active_key_hash) = self.active_key_hash.take() {
-            self.scope_lookup.mark_resource_dropped::<K, V>(
-                &active_key_hash,
-                &self.cache_key,
-                self.resource_id,
-            );
+            self.scope_lookup
+                .mark_resource_dropped::<K, V>(&active_key_hash, &self.cache_key, self.resource_id);
         }
     }
 }

@@ -106,8 +106,7 @@ pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
         let add_query = {
             let cache_rep = cache_rep.clone();
             move |query_info: QueryCreatedInfo| {
-                let mut scope_subscriptions_mut =
-                    client.untyped_client.scope_lookup.scope_subscriptions_mut();
+                let mut scope_subscriptions_mut = client.untyped_client.scope_lookup.scope_subscriptions_mut();
 
                 let value_set_updated_or_removed_signal = scope_subscriptions_mut
                     .add_value_set_updated_or_removed_subscription(
@@ -116,22 +115,17 @@ pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
                     );
 
                 let value_derivs = {
-                    let value_set_updated_or_removed_signal =
-                        value_set_updated_or_removed_signal.clone();
+                    let value_set_updated_or_removed_signal = value_set_updated_or_removed_signal.clone();
                     let value_existed_at_one_point = AtomicBool::new(false);
                     ArcSignal::derive(move || {
                         // Will be None when the query has been gc'd:
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) = client
-                                .untyped_client
-                                .scope_lookup
-                                .scopes()
-                                .get(&query_info.cache_key)
+                            && let Some(scope) = client.untyped_client.scope_lookup.scopes().get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
-                            // So is_gced isn't true during the initial period where the query hasn't finished fetching yet:
-                            value_existed_at_one_point
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            // So is_gced isn't true during the initial period where the
+                            // query hasn't finished fetching yet:
+                            value_existed_at_one_point.store(true, std::sync::atomic::Ordering::Relaxed);
                             return ValueDerivs {
                                 // WONTPANIC: always on single-threaded client
                                 debug_value: dyn_query.debug_value_may_panic(),
@@ -142,9 +136,9 @@ pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
                         ValueDerivs {
                             debug_value: DebugValue::new(&"Fetching..."),
                             updated_at: Utc::now(),
-                            // So is_gced isn't true during the initial period where the query hasn't finished fetching yet:
-                            is_gced: value_existed_at_one_point
-                                .load(std::sync::atomic::Ordering::Relaxed),
+                            // So is_gced isn't true during the initial period where the
+                            // query hasn't finished fetching yet:
+                            is_gced: value_existed_at_one_point.load(std::sync::atomic::Ordering::Relaxed),
                         }
                     })
                 };
@@ -156,17 +150,12 @@ pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
 
                 let is_invalidated = {
                     let events = events.clone();
-                    let value_set_updated_or_removed_signal =
-                        value_set_updated_or_removed_signal.clone();
+                    let value_set_updated_or_removed_signal = value_set_updated_or_removed_signal.clone();
                     ArcSignal::derive(move || {
                         // Events are the only subscription that updates on invalidated:
                         events.track();
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) = client
-                                .untyped_client
-                                .scope_lookup
-                                .scopes()
-                                .get(&query_info.cache_key)
+                            && let Some(scope) = client.untyped_client.scope_lookup.scopes().get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
                             return dyn_query.is_invalidated();
@@ -201,11 +190,7 @@ pub fn prepare<Codec: 'static>(client: QueryClient<Codec>) -> CacheRep {
 
                         // Will be None when the query has been gc'd:
                         if value_set_updated_or_removed_signal.get().is_some()
-                            && let Some(scope) = client
-                                .untyped_client
-                                .scope_lookup
-                                .scopes()
-                                .get(&query_info.cache_key)
+                            && let Some(scope) = client.untyped_client.scope_lookup.scopes().get(&query_info.cache_key)
                             && let Some(dyn_query) = scope.get_dyn_query(&query_info.key_hash)
                         {
                             if let Some(till_stale) = dyn_query.till_stale() {

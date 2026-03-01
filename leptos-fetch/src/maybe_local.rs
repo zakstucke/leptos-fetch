@@ -19,7 +19,8 @@ pub(crate) struct MaybeLocal<V>(Inner<V>);
 // SAFETY: `MaybeLocal` can *only* be given a T in three ways
 // 1) via new(), which requires T: Send + Sync
 // 2) via new_local(), which wraps T in a SendWrapper
-// 3) via deref_mut(), which provides access to &mut T, either already in a SendWrapper, or not if it was already determined T is a threadsafe type
+// 3) via deref_mut(), which provides access to &mut T, either already in a SendWrapper,
+//    or not if it was already determined T is a threadsafe type
 unsafe impl<V> Send for MaybeLocal<V> {}
 unsafe impl<V> Sync for MaybeLocal<V> {}
 
@@ -29,10 +30,7 @@ where
 {
     fn clone(&self) -> Self {
         match &self.0 {
-            Inner::Local {
-                value,
-                src_thread_id,
-            } => Self(Inner::Local {
+            Inner::Local { value, src_thread_id } => Self(Inner::Local {
                 value: value.clone(),
                 src_thread_id: *src_thread_id,
             }),
@@ -79,7 +77,8 @@ impl<K> MaybeLocal<Arc<dyn Fn(&K)>> {
 }
 
 impl<V> MaybeLocal<V> {
-    /// Wraps `value` in a [`SendWrapper`] to make threadsafe. Access to this value will panic if called from a different thread.
+    /// Wraps `value` in a [`SendWrapper`] to make threadsafe.
+    /// Access to this value will panic if called from a different thread.
     pub fn new_local(value: V) -> Self {
         Self(Inner::Local {
             value: SendWrapper::new(value),
@@ -114,10 +113,7 @@ impl<V> MaybeLocal<V> {
     #[track_caller]
     pub fn value_if_safe(&self) -> Option<&V> {
         match &self.0 {
-            Inner::Local {
-                value,
-                src_thread_id,
-            } => {
+            Inner::Local { value, src_thread_id } => {
                 if std::thread::current().id() == *src_thread_id {
                     Some(value.deref())
                 } else {
@@ -132,10 +128,7 @@ impl<V> MaybeLocal<V> {
     #[track_caller]
     pub fn value_mut_value_if_safe(&mut self) -> Option<&mut V> {
         match &mut self.0 {
-            Inner::Local {
-                value,
-                src_thread_id,
-            } => {
+            Inner::Local { value, src_thread_id } => {
                 if std::thread::current().id() == *src_thread_id {
                     Some(value.deref_mut())
                 } else {
@@ -154,10 +147,7 @@ impl<V> MaybeLocal<V> {
         NewV: Send + Sync + 'static,
     {
         match self.0 {
-            Inner::Local {
-                value,
-                src_thread_id,
-            } => MaybeLocal(Inner::Local {
+            Inner::Local { value, src_thread_id } => MaybeLocal(Inner::Local {
                 value: SendWrapper::new(mapper(value.take())),
                 src_thread_id,
             }),
