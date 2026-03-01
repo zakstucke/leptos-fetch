@@ -129,15 +129,11 @@ where
                 self.local_caches
                     .get(&std::thread::current().id())
                     .into_iter()
-                    .flat_map(|local_cache| {
-                        local_cache.values().filter_map(QueryOrPending::as_query)
-                    }),
+                    .flat_map(|local_cache| local_cache.values().filter_map(QueryOrPending::as_query)),
             )
     }
 
-    pub fn all_queries_mut_include_pending(
-        &mut self,
-    ) -> impl Iterator<Item = &mut QueryOrPending<K, V>> {
+    pub fn all_queries_mut_include_pending(&mut self) -> impl Iterator<Item = &mut QueryOrPending<K, V>> {
         self.threadsafe_cache.values_mut().chain(
             self.local_caches
                 .get_mut(&std::thread::current().id())
@@ -153,8 +149,7 @@ where
                 .or_default()
                 .insert(key_hash, QueryOrPending::Query(query));
         } else {
-            self.threadsafe_cache
-                .insert(key_hash, QueryOrPending::Query(query));
+            self.threadsafe_cache.insert(key_hash, QueryOrPending::Query(query));
         }
         self.scope_lookup
             .scope_subscriptions_mut()
@@ -162,10 +157,7 @@ where
     }
 
     pub fn insert(&mut self, key_hash: KeyHash, query: Query<K, V>) {
-        #[cfg(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        ))]
+        #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
         {
             let info = crate::subs_client::QueryCreatedInfo {
                 cache_key: self.query_scope_info.cache_key,
@@ -176,14 +168,9 @@ where
                 combined_options: query.combined_options,
             };
             self.insert_without_query_created_notif(key_hash, query);
-            self.scope_lookup
-                .client_subscriptions_mut()
-                .notify_query_created(info);
+            self.scope_lookup.client_subscriptions_mut().notify_query_created(info);
         }
-        #[cfg(not(any(
-            all(debug_assertions, feature = "devtools"),
-            feature = "devtools-always"
-        )))]
+        #[cfg(not(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always")))]
         {
             self.insert_without_query_created_notif(key_hash, query);
         }
@@ -227,10 +214,7 @@ where
             .and_then(QueryOrPending::as_query_mut)
     }
 
-    pub fn get_mut_include_pending(
-        &mut self,
-        key_hash: &KeyHash,
-    ) -> Option<&mut QueryOrPending<K, V>> {
+    pub fn get_mut_include_pending(&mut self, key_hash: &KeyHash) -> Option<&mut QueryOrPending<K, V>> {
         // Threadsafe always takes priority:
         self.threadsafe_cache.get_mut(key_hash).or_else(|| {
             self.local_caches

@@ -30,15 +30,9 @@ pub(crate) struct ScopeSubs {
 const IS_FETCHING_ID: &str = "IsFetching";
 const IS_LOADING_ID: &str = "IsLoading";
 const VALUE_SET_UPDATED_OR_REMOVED_ID: &str = "ValueSetUpdatedOrRemoved";
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 const ACTIVE_RESOURCES_ID: &str = "ActiveResources";
-#[cfg(any(
-    all(debug_assertions, feature = "devtools"),
-    feature = "devtools-always"
-))]
+#[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
 const EVENTS_UPDATED_ID: &str = "EventsUpdated";
 
 impl ScopeSubs {
@@ -62,13 +56,8 @@ impl ScopeSubs {
             IS_FETCHING_ID,
             move || {
                 ArcRwSignal::new(
-                    if let Some(initial_key) = keyer
-                        .value_if_safe()
-                        .and_then(|keyer| keyer.get_untracked())
-                    {
-                        actively_fetching
-                            .lock()
-                            .contains_key(&(cache_key, initial_key))
+                    if let Some(initial_key) = keyer.value_if_safe().and_then(|keyer| keyer.get_untracked()) {
+                        actively_fetching.lock().contains_key(&(cache_key, initial_key))
                     } else {
                         false
                     },
@@ -98,13 +87,8 @@ impl ScopeSubs {
             IS_LOADING_ID,
             move || {
                 ArcRwSignal::new(
-                    if let Some(initial_key) = keyer
-                        .value_if_safe()
-                        .and_then(|keyer| keyer.get_untracked())
-                    {
-                        if let Some(loading_first_time) =
-                            actively_fetching.lock().get(&(cache_key, initial_key))
-                        {
+                    if let Some(initial_key) = keyer.value_if_safe().and_then(|keyer| keyer.get_untracked()) {
+                        if let Some(loading_first_time) = actively_fetching.lock().get(&(cache_key, initial_key)) {
                             *loading_first_time
                         } else {
                             false
@@ -127,10 +111,7 @@ impl ScopeSubs {
         ArcSignal::derive(move || signal.get().unwrap_or(false))
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub fn add_active_resources_subscription(
         &mut self,
         cache_key: ScopeCacheKey,
@@ -143,10 +124,7 @@ impl ScopeSubs {
             ACTIVE_RESOURCES_ID,
             move || {
                 ArcRwSignal::new(
-                    if let Some(initial_key) = keyer
-                        .value_if_safe()
-                        .and_then(|keyer| keyer.get_untracked())
-                    {
+                    if let Some(initial_key) = keyer.value_if_safe().and_then(|keyer| keyer.get_untracked()) {
                         scope_lookup
                             .scopes()
                             .get(&cache_key)
@@ -195,10 +173,7 @@ impl ScopeSubs {
         )
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub fn add_events_subscription(
         &mut self,
         cache_key: ScopeCacheKey,
@@ -211,18 +186,11 @@ impl ScopeSubs {
             EVENTS_UPDATED_ID,
             move || {
                 ArcRwSignal::new(
-                    if let Some(initial_key) = keyer
-                        .value_if_safe()
-                        .and_then(|keyer| keyer.get_untracked())
-                    {
+                    if let Some(initial_key) = keyer.value_if_safe().and_then(|keyer| keyer.get_untracked()) {
                         scope_lookup
                             .scopes()
                             .get(&cache_key)
-                            .and_then(|scope| {
-                                scope
-                                    .get_dyn_query(&initial_key)
-                                    .map(|query| query.events().to_vec())
-                            })
+                            .and_then(|scope| scope.get_dyn_query(&initial_key).map(|query| query.events().to_vec()))
                             .unwrap_or_default()
                     } else {
                         vec![]
@@ -257,7 +225,8 @@ impl ScopeSubs {
     {
         let listener_id = new_sub_listener_id();
 
-        // By including the guard in the derived signal, we can hook into the signal itself being dropped, at which point we can GC the subscriber.
+        // By including the guard in the derived signal, we can hook into the signal
+        // itself being dropped, at which point we can GC the subscriber.
         let new_sub_drop_guard = Arc::new(SubDropGuard {
             listener_id,
             variant_id,
@@ -278,9 +247,7 @@ impl ScopeSubs {
                     new_sub_drop_guard.set_key_hash(&mut guard, key_hash);
                     let sub = guard
                         .entry((cache_key, variant_id, key_hash))
-                        .or_insert_with(|| {
-                            Sub::new(new_variant(new_signal()), &new_sub_drop_guard)
-                        });
+                        .or_insert_with(|| Sub::new(new_variant(new_signal()), &new_sub_drop_guard));
                     // Add the listener to the sub in case it wasn't already there:
                     sub.add_listener(listener_id);
                     Some(signal_from_variant(sub).get())
@@ -294,12 +261,7 @@ impl ScopeSubs {
     }
 
     /// NOTE: use with_notify_fetching instead.
-    pub fn notify_fetching_start(
-        &mut self,
-        cache_key: ScopeCacheKey,
-        key_hash: KeyHash,
-        loading_first_time: bool,
-    ) {
+    pub fn notify_fetching_start(&mut self, cache_key: ScopeCacheKey, key_hash: KeyHash, loading_first_time: bool) {
         self.actively_fetching
             .lock()
             .insert((cache_key, key_hash), loading_first_time);
@@ -311,10 +273,7 @@ impl ScopeSubs {
         .into_iter()
         .flatten()
         {
-            if matches!(
-                sub.variant,
-                SubVariant::IsFetching(_) | SubVariant::IsLoading(_)
-            ) {
+            if matches!(sub.variant, SubVariant::IsFetching(_) | SubVariant::IsLoading(_)) {
                 match &sub.variant {
                     SubVariant::IsFetching(signal) => {
                         // Don't want to trigger if not changing:
@@ -335,12 +294,7 @@ impl ScopeSubs {
     }
 
     /// NOTE: use with_notify_fetching instead.
-    pub fn notify_fetching_finish(
-        &mut self,
-        cache_key: ScopeCacheKey,
-        key_hash: KeyHash,
-        loading_first_time: bool,
-    ) {
+    pub fn notify_fetching_finish(&mut self, cache_key: ScopeCacheKey, key_hash: KeyHash, loading_first_time: bool) {
         self.actively_fetching.lock().remove(&(cache_key, key_hash));
         let subs_guard = self.subs.lock();
         for sub in [
@@ -350,10 +304,7 @@ impl ScopeSubs {
         .into_iter()
         .flatten()
         {
-            if matches!(
-                sub.variant,
-                SubVariant::IsFetching(_) | SubVariant::IsLoading(_)
-            ) {
+            if matches!(sub.variant, SubVariant::IsFetching(_) | SubVariant::IsLoading(_)) {
                 match &sub.variant {
                     SubVariant::IsFetching(signal) => {
                         // Don't want to trigger if not changing:
@@ -373,20 +324,14 @@ impl ScopeSubs {
         }
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub fn notify_active_resource_change(
         &mut self,
         cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         active_resources: usize,
     ) {
-        if let Some(sub) = self
-            .subs
-            .lock()
-            .get_mut(&(cache_key, ACTIVE_RESOURCES_ID, key_hash))
+        if let Some(sub) = self.subs.lock().get_mut(&(cache_key, ACTIVE_RESOURCES_ID, key_hash))
             && let SubVariant::ActiveResources(signal) = &sub.variant
         {
             // Don't want to trigger if not changing:
@@ -396,35 +341,25 @@ impl ScopeSubs {
         }
     }
 
-    pub fn notify_value_set_updated_or_removed(
-        &mut self,
-        cache_key: ScopeCacheKey,
-        key_hash: KeyHash,
-    ) {
-        if let Some(sub) =
-            self.subs
-                .lock()
-                .get_mut(&(cache_key, VALUE_SET_UPDATED_OR_REMOVED_ID, key_hash))
+    pub fn notify_value_set_updated_or_removed(&mut self, cache_key: ScopeCacheKey, key_hash: KeyHash) {
+        if let Some(sub) = self
+            .subs
+            .lock()
+            .get_mut(&(cache_key, VALUE_SET_UPDATED_OR_REMOVED_ID, key_hash))
             && let SubVariant::ValueSetUpdatedOrRemoved(signal) = &sub.variant
         {
             signal.set(new_value_modified_id());
         }
     }
 
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     pub fn notify_events_updated(
         &mut self,
         cache_key: ScopeCacheKey,
         key_hash: KeyHash,
         new_events: &[crate::events::Event],
     ) {
-        if let Some(sub) = self
-            .subs
-            .lock()
-            .get_mut(&(cache_key, EVENTS_UPDATED_ID, key_hash))
+        if let Some(sub) = self.subs.lock().get_mut(&(cache_key, EVENTS_UPDATED_ID, key_hash))
             && let SubVariant::EventsUpdated(signal) = &sub.variant
         {
             signal.set(new_events.to_vec());
@@ -471,15 +406,9 @@ enum SubVariant {
     IsFetching(ArcRwSignal<bool>),
     IsLoading(ArcRwSignal<bool>),
     ValueSetUpdatedOrRemoved(ArcRwSignal<u64>),
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     ActiveResources(ArcRwSignal<usize>),
-    #[cfg(any(
-        all(debug_assertions, feature = "devtools"),
-        feature = "devtools-always"
-    ))]
+    #[cfg(any(all(debug_assertions, feature = "devtools"), feature = "devtools-always"))]
     EventsUpdated(ArcRwSignal<Vec<crate::events::Event>>),
 }
 

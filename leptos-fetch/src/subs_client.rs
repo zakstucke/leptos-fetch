@@ -69,9 +69,7 @@ impl ClientSubs {
             }
         }
 
-        self.subs
-            .lock()
-            .insert(sub_id, Sub::new(SubVariant::QueryCreated(tx)));
+        self.subs.lock().insert(sub_id, Sub::new(SubVariant::QueryCreated(tx)));
 
         QueryCreated {
             rx,

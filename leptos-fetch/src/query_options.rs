@@ -19,7 +19,9 @@ impl QueryOptions {
 
     /// Set the duration that should pass before a query is considered stale.
     ///
-    /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
+    /// Once stale, after any new interaction with the query, a new resource using it,
+    /// declarative interactions etc, the query will be refetched in the background,
+    /// and update active resources.
     ///
     /// Default: `never`
     #[track_caller]
@@ -37,7 +39,9 @@ impl QueryOptions {
 
     /// Set the duration that should pass before an unused query is garbage collected.
     ///
-    /// After this time, if the query isn't being used by any resources, the query will be removed from the cache, to minimise the cache's size. If the query is in active use, the gc will be scheduled to check again after the same time interval.
+    /// After this time, if the query isn't being used by any resources, the query will
+    /// be removed from the cache, to minimise the cache's size. If the query is in active
+    /// use, the gc will be scheduled to check again after the same time interval.
     ///
     /// To never garbage collect, set [`std::time::Duration::MAX`].
     ///
@@ -57,7 +61,8 @@ impl QueryOptions {
 
     /// Set the interval after which to automatically refetch the query if there are any active resources.
     ///
-    /// If the query is being used by any resources, it will be invalidated and refetched in the background, updating active resources according to this interval.
+    /// If the query is being used by any resources, it will be invalidated and refetched
+    /// in the background, updating active resources according to this interval.
     ///
     /// Default: No refetching
     #[track_caller]
@@ -68,7 +73,9 @@ impl QueryOptions {
 
     /// The duration that should pass before a query is considered stale.
     ///
-    /// Once stale, after any new interaction with the query, a new resource using it, declarative interactions etc, the query will be refetched in the background, and update active resources.
+    /// Once stale, after any new interaction with the query, a new resource using it,
+    /// declarative interactions etc, the query will be refetched in the background,
+    /// and update active resources.
     ///
     /// Default: `never`
     pub fn stale_time(&self) -> std::time::Duration {
@@ -77,7 +84,9 @@ impl QueryOptions {
 
     /// The duration that should pass before an unused query is garbage collected.
     ///
-    /// After this time, if the query isn't being used by any resources, the query will be removed from the cache, to minimise the cache's size. If the query is in active use, the gc will be scheduled to check again after the same time interval.
+    /// After this time, if the query isn't being used by any resources, the query will
+    /// be removed from the cache, to minimise the cache's size. If the query is in active
+    /// use, the gc will be scheduled to check again after the same time interval.
     ///
     /// Default: `5 minutes`
     pub fn gc_time(&self) -> std::time::Duration {
@@ -86,7 +95,8 @@ impl QueryOptions {
 
     /// The interval (if any) after which to automatically refetch the query if there are any active resources.
     ///
-    /// If the query is being used by any resources, it will be invalidated and refetched in the background, updating active resources according to this interval.
+    /// If the query is being used by any resources, it will be invalidated and refetched
+    /// in the background, updating active resources according to this interval.
     ///
     /// Default: No refetching
     pub fn refetch_interval(&self) -> Option<std::time::Duration> {

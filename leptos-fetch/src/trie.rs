@@ -40,10 +40,7 @@ impl<T: Eq + Hash> Trie<T> {
         node.items.insert(item);
     }
 
-    pub fn find_with_prefix<S: AsRef<str>>(
-        &self,
-        prefix: impl IntoIterator<Item = S>,
-    ) -> HashSet<&T> {
+    pub fn find_with_prefix<S: AsRef<str>>(&self, prefix: impl IntoIterator<Item = S>) -> HashSet<&T> {
         // Navigate to prefix node
         let mut node = &self.root;
         for segment in prefix {
@@ -89,10 +86,7 @@ impl<T: Eq + Hash> Trie<T> {
                 let mut current = &mut self.root;
 
                 for segment in &path[..depth] {
-                    current = current
-                        .children
-                        .get_mut(segment)
-                        .expect("Path should exist");
+                    current = current.children.get_mut(segment).expect("Path should exist");
                 }
 
                 let segment = &path[depth];

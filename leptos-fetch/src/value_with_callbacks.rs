@@ -59,10 +59,7 @@ pub(crate) enum GcHandle {
 
 impl GcHandle {
     // gc_cb returns true if gc happened, false if should call again after same delay.
-    pub fn new(
-        gc_cb: Option<Arc<Box<dyn Fn() -> bool + Send + Sync>>>,
-        duration: Duration,
-    ) -> Self {
+    pub fn new(gc_cb: Option<Arc<Box<dyn Fn() -> bool + Send + Sync>>>, duration: Duration) -> Self {
         if let Some(gc_cb) = gc_cb {
             #[cfg(any(not(test), target_arch = "wasm32"))]
             {

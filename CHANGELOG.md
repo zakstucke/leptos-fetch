@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Code formatting. ([#66](https://github.com/zakstucke/leptos-fetch/pull/66))
+
 ## [0.4.9](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.9)
 - Remove erroneous internal debug `println!` statements ([#62](https://github.com/zakstucke/leptos-fetch/pull/62))
 

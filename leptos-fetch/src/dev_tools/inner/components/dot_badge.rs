@@ -3,11 +3,7 @@ use leptos::prelude::*;
 use super::ColorOption;
 
 #[component]
-pub fn DotBadge(
-    children: Children,
-    color: ColorOption,
-    #[prop(default = true)] dot: bool,
-) -> impl IntoView {
+pub fn DotBadge(children: Children, color: ColorOption, #[prop(default = true)] dot: bool) -> impl IntoView {
     view! {
         <span class=match color {
             ColorOption::Blue => {

@@ -67,71 +67,70 @@ pub(crate) fn DevtoolsInner<Codec: 'static>(client: QueryClient<Codec>) -> impl 
         ..
     } = expect_context();
 
-    let filtered_and_sorted_queries =
-        Signal::derive({
-            let filter = filter.clone();
-            let scope_sort_config = scope_sort_config.clone();
-            move || {
-                let filter = filter.get();
+    let filtered_and_sorted_queries = Signal::derive({
+        let filter = filter.clone();
+        let scope_sort_config = scope_sort_config.clone();
+        move || {
+            let filter = filter.get();
 
-                let mut queries = cache_rep
-                    .all_queries
-                    .read()
-                    .iter()
-                    .map(|(cache_key, scoped_queries)| {
-                        (
-                            *cache_key,
-                            scoped_queries.title.clone(),
-                            scoped_queries.sort_config.clone(),
-                            scoped_queries.filter.clone(),
-                            filter_s(
-                                &filter,
-                                &[&scoped_queries.title],
-                                |(_key_hash, query)| query.debug_key.compact().as_str().into(),
-                                scoped_queries.scoped_queries.read().iter(),
-                            )
-                            .into_iter()
-                            .map(|(key_hash, query)| (*key_hash, query.clone()))
-                            .collect::<Vec<_>>(),
+            let mut queries = cache_rep
+                .all_queries
+                .read()
+                .iter()
+                .map(|(cache_key, scoped_queries)| {
+                    (
+                        *cache_key,
+                        scoped_queries.title.clone(),
+                        scoped_queries.sort_config.clone(),
+                        scoped_queries.filter.clone(),
+                        filter_s(
+                            &filter,
+                            &[&scoped_queries.title],
+                            |(_key_hash, query)| query.debug_key.compact().as_str().into(),
+                            scoped_queries.scoped_queries.read().iter(),
                         )
-                    })
-                    .filter(
-                        |(_cache_key, _scope_title, _sort_config, _filter, queries)| {
-                            // Filter out empty queries
-                            !queries.is_empty()
-                        },
+                        .into_iter()
+                        .map(|(key_hash, query)| (*key_hash, query.clone()))
+                        .collect::<Vec<_>>(),
                     )
-                    .collect::<Vec<_>>();
+                })
+                .filter(|(_cache_key, _scope_title, _sort_config, _filter, queries)| {
+                    // Filter out empty queries
+                    !queries.is_empty()
+                })
+                .collect::<Vec<_>>();
 
-                scope_sort_config.read().sort(
-                    &mut queries,
-                    |(_cache_key, scope_title, _sort_config, _filter, queries)| {
-                        // Including the query keys in the search, making it more of a global search
-                        std::iter::once(scope_title.as_str().into())
-                            .chain(queries.iter().map(|(_key_hash, query)| {
-                                query.debug_key.compact().as_str().into()
-                            }))
-                            .collect::<Vec<_>>()
-                    },
-                    |(_cache_key, _scope_title, _sort_config, _filter, queries)| {
-                        queries
-                            .iter()
-                            .map(|(_key_hash, query)| query.value_derivs.read().updated_at)
-                            .max()
-                            .unwrap_or(chrono::DateTime::<Utc>::MIN_UTC)
-                    },
-                    |(_cache_key, _scope_title, _sort_config, _filter, queries)| {
-                        queries
-                            .iter()
-                            .map(|(_key_hash, query)| query.created_at)
-                            .max()
-                            .unwrap_or(chrono::DateTime::<Utc>::MIN_UTC)
-                    },
-                );
+            scope_sort_config.read().sort(
+                &mut queries,
+                |(_cache_key, scope_title, _sort_config, _filter, queries)| {
+                    // Including the query keys in the search, making it more of a global search
+                    std::iter::once(scope_title.as_str().into())
+                        .chain(
+                            queries
+                                .iter()
+                                .map(|(_key_hash, query)| query.debug_key.compact().as_str().into()),
+                        )
+                        .collect::<Vec<_>>()
+                },
+                |(_cache_key, _scope_title, _sort_config, _filter, queries)| {
+                    queries
+                        .iter()
+                        .map(|(_key_hash, query)| query.value_derivs.read().updated_at)
+                        .max()
+                        .unwrap_or(chrono::DateTime::<Utc>::MIN_UTC)
+                },
+                |(_cache_key, _scope_title, _sort_config, _filter, queries)| {
+                    queries
+                        .iter()
+                        .map(|(_key_hash, query)| query.created_at)
+                        .max()
+                        .unwrap_or(chrono::DateTime::<Utc>::MIN_UTC)
+                },
+            );
 
-                queries
-            }
-        });
+            queries
+        }
+    });
 
     let container_ref = leptos::prelude::NodeRef::<leptos::html::Div>::new();
 
@@ -170,27 +169,18 @@ pub(crate) fn DevtoolsInner<Codec: 'static>(client: QueryClient<Codec>) -> impl 
                 let move_closure = move_closure.clone();
                 Box::new(move || {
                     window
-                        .remove_event_listener_with_callback(
-                            "mousemove",
-                            move_closure.as_ref().unchecked_ref(),
-                        )
+                        .remove_event_listener_with_callback("mousemove", move_closure.as_ref().unchecked_ref())
                         .unwrap();
 
                     if let Some(end) = end.take() {
-                        let _ = window.remove_event_listener_with_callback(
-                            "mouseup",
-                            end.as_ref().unchecked_ref(),
-                        );
+                        let _ = window.remove_event_listener_with_callback("mouseup", end.as_ref().unchecked_ref());
                     }
                 }) as Box<dyn FnMut()>
             })
             .into_js_value();
 
             window
-                .add_event_listener_with_callback(
-                    "mousemove",
-                    move_closure.as_ref().clone().unchecked_ref(),
-                )
+                .add_event_listener_with_callback("mousemove", move_closure.as_ref().clone().unchecked_ref())
                 .unwrap();
 
             window
@@ -540,10 +530,7 @@ fn Header() -> impl IntoView {
 }
 
 #[component]
-fn SearchInput(
-    filter: ArcRwSignal<String>,
-    maybe_cache_key: Option<ScopeCacheKey>,
-) -> impl IntoView {
+fn SearchInput(filter: ArcRwSignal<String>, maybe_cache_key: Option<ScopeCacheKey>) -> impl IntoView {
     view! {
         <div class="lq-relative lq-w-64">
             <div class="lq-pointer-events-none lq-absolute lq-inset-y-0 lq-left-0 lq-flex lq-items-center lq-pl-3 lq-text-zinc-400">
@@ -697,10 +684,7 @@ fn CaretSwitch(open: RwSignal<bool>) -> impl IntoView {
 }
 
 #[component]
-fn ClearCache<Codec: 'static>(
-    client: QueryClient<Codec>,
-    maybe_cache_key: Option<ScopeCacheKey>,
-) -> impl IntoView {
+fn ClearCache<Codec: 'static>(client: QueryClient<Codec>, maybe_cache_key: Option<ScopeCacheKey>) -> impl IntoView {
     view! {
         <button
             class="lq-bg-lq-input lq-text-lq-input-foreground lq-rounded-md lq-px-2 lq-py-1 lq-text-xs lq-inline-flex lq-items-center lq-gap-1 lq-border lq-border-lq-border"
@@ -877,19 +861,13 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
     });
 
     let section_class = "lq-px-2 lq-py-1 lq-flex lq-flex-col lq-items-center lq-gap-1 lq-w-full";
-    let entry_class =
-        "lq-flex lq-items-center lq-justify-start lq-text-xs lq-font-medium lq-w-full";
+    let entry_class = "lq-flex lq-items-center lq-justify-start lq-text-xs lq-font-medium lq-w-full";
 
     fn format_duration(dur: Option<std::time::Duration>) -> String {
         if let Some(dur) = dur {
-            chrono_humanize::HumanTime::from(
-                chrono::Duration::from_std(dur).expect("chrono duration"),
-            )
-            .to_text_en(
-                chrono_humanize::Accuracy::Precise,
-                chrono_humanize::Tense::Present,
-            )
-            .to_string()
+            chrono_humanize::HumanTime::from(chrono::Duration::from_std(dur).expect("chrono duration"))
+                .to_text_en(chrono_humanize::Accuracy::Precise, chrono_humanize::Tense::Present)
+                .to_string()
         } else {
             "n/a".to_string()
         }
@@ -916,10 +894,7 @@ fn SelectedQuery<Codec: 'static>(client: QueryClient<Codec>, query: QueryRep) ->
                 // Removing millisecond accuracy:
                 TimeDelta::milliseconds((td.num_milliseconds() / 1000) * 1000),
             )
-            .to_text_en(
-                chrono_humanize::Accuracy::Precise,
-                chrono_humanize::Tense::Future,
-            )
+            .to_text_en(chrono_humanize::Accuracy::Precise, chrono_humanize::Tense::Future)
         };
 
         let stale_in = safe_dt_dur_add(updated_at, opts.stale_time()) - chrono::Utc::now();

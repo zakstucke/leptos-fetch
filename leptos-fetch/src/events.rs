@@ -20,12 +20,7 @@ impl Deref for Events {
 }
 
 impl Events {
-    pub fn new(
-        scope_lookup: &ScopeLookup,
-        cache_key: ScopeCacheKey,
-        key_hash: KeyHash,
-        events: Vec<Event>,
-    ) -> Self {
+    pub fn new(scope_lookup: &ScopeLookup, cache_key: ScopeCacheKey, key_hash: KeyHash, events: Vec<Event>) -> Self {
         let mut self_ = Self {
             scope_lookup: *scope_lookup,
             cache_key,
@@ -45,9 +40,11 @@ impl Events {
         let mut iter = events.into_iter();
         if let Some(first) = iter.next() {
             self.events.extend(std::iter::once(first).chain(iter));
-            self.scope_lookup
-                .scope_subscriptions_mut()
-                .notify_events_updated(self.cache_key, self.key_hash, self.events.deref());
+            self.scope_lookup.scope_subscriptions_mut().notify_events_updated(
+                self.cache_key,
+                self.key_hash,
+                self.events.deref(),
+            );
         }
     }
 }
