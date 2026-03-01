@@ -2143,4 +2143,54 @@ mod test {
             })
             .await;
     }
+
+    /// Regression test for https://github.com/zakstucke/leptos-fetch/issues/64
+    ///
+    /// When data is prefetched, resources should still go through an async suspend-resolve
+    /// cycle (yield) rather than resolving synchronously. This is critical for `Transition` to
+    /// work correctly: without the yield, the Transition's internal `nth_run` counter doesn't
+    /// advance past the threshold, causing the fallback to show on the first key change.
+    #[rstest]
+    #[tokio::test]
+    async fn test_prefetched_resource_yields_before_resolving(
+        #[values(ResourceType::Local, ResourceType::Normal)] resource_type: ResourceType,
+        #[values(false, true)] arc: bool,
+    ) {
+        identify_parking_lot_deadlocks();
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let (client, _owner) = prep_client!();
+                let (fetcher, fetch_calls) = default_fetcher();
+
+                let key: u64 = 5;
+
+                // Prefetch the query so it's in the cache.
+                client.prefetch_query(fetcher.clone(), key).await;
+                assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                assert_eq!(client.get_cached_query(&fetcher, key), Some(10));
+
+                // Now create a resource using the same key.
+                // The resource should NOT resolve synchronously even though the data is cached.
+                macro_rules! check {
+                    ($get_resource:expr) => {{
+                        let resource = $get_resource();
+
+                        assert_eq!(
+                            resource.get_untracked(),
+                            None,
+                            "Resource should NOT resolve synchronously on cache hit; it must yield first for Transition compatibility"
+                        );
+
+                        if !(cfg!(feature = "ssr") && resource_type == ResourceType::Local) {
+                            tick!();
+                            assert_eq!(resource.get_untracked(), Some(10));
+                            assert_eq!(fetch_calls.load(Ordering::Relaxed), 1);
+                        }
+                    }};
+                }
+
+                vari_new_resource_with_cb!(check, client, fetcher.clone(), move || key, resource_type, arc);
+            })
+            .await;
+    }
 }
