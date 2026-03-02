@@ -30,7 +30,10 @@ use crate::{
     query_maybe_key::QueryMaybeKey,
     query_scope::{QueryScopeInfo, QueryScopeLocalTrait, QueryScopeQueryInfo, QueryScopeTrait, ScopeCacheKey},
     resource_drop_guard::ResourceDropGuard,
-    utils::{KeyHash, OwnerChain, ResetInvalidated, new_buster_id, new_resource_id, run_external_callbacks},
+    utils::{
+        KeyHash, OwnerChain, ResetInvalidated, client_only_yield_now, new_buster_id, new_resource_id,
+        run_external_callbacks,
+    },
 };
 
 use super::cache::ScopeLookup;
@@ -283,6 +286,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                 async move {
                     if let Some(key) = maybe_key {
                         let query_scope_query_info = || QueryScopeQueryInfo::new_local(&query_scope, &key);
+
+                        // Regression test for https://github.com/zakstucke/leptos-fetch/issues/64
+                        //
+                        // When data is prefetched, resources should still go through an async suspend-resolve
+                        // cycle (yield) rather than resolving synchronously. This is critical for `Transition` to
+                        // work correctly: without the yield, the Transition's internal `nth_run` counter doesn't
+                        // advance past the threshold, causing the fallback to show on the first key change.
+                        let was_cached = AtomicBool::new(false);
+
                         let value = client
                             .untyped_client
                             .cached_or_fetch(
@@ -305,6 +317,7 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     info.cached.mark_resource_active(resource_id);
                                     match info.variant {
                                         CachedOrFetchCbInputVariant::CachedUntouched => {
+                                            was_cached.store(true, std::sync::atomic::Ordering::Relaxed);
                                             // If stale refetch in the background with the
                                             // prefetch() function, which'll recognise it's
                                             // stale, refetch it and invalidate busters:
@@ -350,6 +363,14 @@ impl<Codec: 'static> QueryClient<Codec> {
                                 &owner_chain,
                             )
                             .await;
+
+                        // Used to add a yield sleep when cached,
+                        // to prevent Transitions registering the first load, leading to fallback being shown on second load.
+                        // https://github.com/zakstucke/leptos-fetch/issues/64
+                        if was_cached.load(std::sync::atomic::Ordering::Relaxed) {
+                            client_only_yield_now().await;
+                        }
+
                         MaybeKey::prepare_mapped_value(Some(value))
                     } else {
                         MaybeKey::prepare_mapped_value(None)
@@ -553,6 +574,15 @@ impl<Codec: 'static> QueryClient<Codec> {
                     async move {
                         if let Some(key) = maybe_key {
                             let query_scope_query_info = || QueryScopeQueryInfo::new(&query_scope, &key);
+
+                            // Regression test for https://github.com/zakstucke/leptos-fetch/issues/64
+                            //
+                            // When data is prefetched, resources should still go through an async suspend-resolve
+                            // cycle (yield) rather than resolving synchronously. This is critical for `Transition` to
+                            // work correctly: without the yield, the Transition's internal `nth_run` counter doesn't
+                            // advance past the threshold, causing the fallback to show on the first key change.
+                            let was_cached = AtomicBool::new(false);
+
                             let value = client
                                 .untyped_client
                                 .cached_or_fetch(
@@ -573,6 +603,8 @@ impl<Codec: 'static> QueryClient<Codec> {
                                         info.cached.mark_resource_active(resource_id);
                                         match info.variant {
                                             CachedOrFetchCbInputVariant::CachedUntouched => {
+                                                was_cached.store(true, std::sync::atomic::Ordering::Relaxed);
+
                                                 // If stale, refetch in the background
                                                 // with prefetch(), which'll recognise
                                                 // it's stale and invalidate busters:
@@ -637,6 +669,14 @@ impl<Codec: 'static> QueryClient<Codec> {
                                     &owner_chain,
                                 )
                                 .await;
+
+                            // Used to add a yield sleep when cached,
+                            // to prevent Transitions registering the first load, leading to fallback being shown on second load.
+                            // https://github.com/zakstucke/leptos-fetch/issues/64
+                            if was_cached.load(std::sync::atomic::Ordering::Relaxed) {
+                                client_only_yield_now().await;
+                            }
+
                             MaybeKey::prepare_mapped_value(Some(value))
                         } else {
                             MaybeKey::prepare_mapped_value(None)

@@ -4,7 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.10](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.10)
 ### Fixed
+- Prevent `Transition` components showing the fallback on second query load, if the initial query was already cached and resolved synchronously. (closes [#64](https://github.com/zakstucke/leptos-fetch/issues/64)). ([#67](https://github.com/zakstucke/leptos-fetch/pull/67))
 - Code formatting. ([#66](https://github.com/zakstucke/leptos-fetch/pull/66))
 
 ## [0.4.9](https://github.com/zakstucke/leptos-fetch/releases/tag/v0.4.9)

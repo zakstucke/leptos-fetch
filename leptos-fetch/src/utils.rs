@@ -9,6 +9,14 @@ use crate::{
     UntypedQueryClient, no_reactive_diagnostics_future::NoReactiveDiagnosticsFuture, query_scope::ScopeCacheKey,
 };
 
+// Simulates a yield_now() for wasm/client only
+pub(crate) async fn client_only_yield_now() {
+    #[cfg(target_arch = "wasm32")]
+    send_wrapper::SendWrapper::new(gloo_timers::future::TimeoutFuture::new(0)).await;
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    tokio::task::yield_now().await;
+}
+
 pub(crate) fn provide_cb_contexts(untyped_client: UntypedQueryClient, scope_cache_key: ScopeCacheKey) {
     leptos::context::provide_context(untyped_client);
     leptos::context::provide_context(scope_cache_key);
